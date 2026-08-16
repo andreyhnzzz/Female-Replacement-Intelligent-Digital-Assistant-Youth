@@ -2,46 +2,75 @@
 from __future__ import annotations
 
 import re
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, TYPE_CHECKING
+from typing import Any, Callable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from core.config import Config
     from core.engine import Engine
+    from core.policy import Policy
     from memory.graph import Graph
     from memory.vault import Vault
+    from system.ports import SystemAccess
+
+
+@dataclass(slots=True)
+class PendingAction:
+    """Una accion planeada que espera el si del usuario.
+
+    Existe porque el STT se equivoca. Antes de mover cuarenta archivos,
+    FRIDAY describe lo que va a hacer y espera confirmacion explicita.
+    """
+    describe: str
+    run: Callable[[], "SkillResult"]
+    created: float = field(default_factory=time.time)
+    ttl_s: float = 120.0
+
+    @property
+    def expired(self) -> bool:
+        return (time.time() - self.created) > self.ttl_s
 
 
 @dataclass
 class SkillContext:
-    """Todo lo que una skill puede tocar. Nada global, nada oculto."""
+    """Todo lo que una skill puede tocar. Nada global, nada oculto.
+
+    `system` llega como el agregado de puertos abstractos: la skill nunca
+    sabe si corre sobre Windows o sobre otra cosa.
+    """
     cfg: "Config"
     vault: "Vault"
     graph: "Graph"
     engine: "Engine"
     text: str = ""                                  # lo que dijo el usuario
     slots: dict[str, Any] = field(default_factory=dict)   # extraido por el router
+    system: "SystemAccess | None" = None
+    policy: "Policy | None" = None
 
 
 @dataclass
 class SkillResult:
     speak: str = ""                                  # voz: corto
-    display: str = ""                                # HUD: markdown
-    data: dict[str, Any] = field(default_factory=dict)   # numeros para los paneles
+    display: str = ""                                # panel: markdown
+    data: dict[str, Any] = field(default_factory=dict)   # numeros para la UI
     writes: list[str] = field(default_factory=list)      # rutas escritas
     ok: bool = True
     error: str = ""
+    pending: PendingAction | None = None                 # espera confirmacion
 
     def to_json(self) -> dict[str, Any]:
         return {"speak": self.speak, "display": self.display, "data": self.data,
-                "writes": self.writes, "ok": self.ok, "error": self.error}
+                "writes": self.writes, "ok": self.ok, "error": self.error,
+                "pending": self.pending.describe if self.pending else ""}
 
 
 class Skill(ABC):
     name: str = "skill"
     description: str = ""
     triggers: list[str] = []          # patrones regex para el enrutado rapido
+    needs: tuple[str, ...] = ()       # puertos de SystemAccess requeridos
 
     def __init__(self, ctx_cfg: "Config"):
         self.cfg = ctx_cfg
@@ -50,20 +79,39 @@ class Skill(ABC):
     def matches(self, text: str) -> float:
         """Confianza 0..1 de que esta skill debe atender el texto.
 
-        Tres senales, en orden de peso:
+        Cuatro senales, en orden de peso:
+
           1. Nombrarme directo ("...en la agenda") gana casi siempre.
-          2. Cobertura del patron sobre la frase.
-          3. Cuantos patrones distintos pegan.
+          2. **Especificidad del disparador**: cuanto texto literal reconoci.
+             Se mide en absoluto, no como fraccion de la frase — si midieras
+             cobertura, "recuerda que <parrafo largo>" perderia por diluirse,
+             y "que tengo abierto" empataria con el "que tengo" de inbox.
+          3. Empezar la frase: un imperativo al inicio es una orden.
+          4. Cuantos patrones distintos pegan.
         """
         low = text.lower()
         hits = [m for m in (re.search(p, low) for p in self.triggers) if m]
         if not hits:
             return 0.0
-        cover = max(len(m.group(0)) for m in hits) / max(len(low), 1)
-        score = 0.55 + min(cover, 0.30) + min(len(hits) - 1, 3) * 0.04
+
+        longest = max(len(m.group(0)) for m in hits)
+        score = 0.55
+        score += min(longest / 20.0, 1.0) * 0.30
+        if any(m.start() <= 1 for m in hits):
+            score += 0.08
+        score += min(len(hits) - 1, 3) * 0.04
         if re.search(rf"\b{re.escape(self.name)}\b", low):
             score += 0.35          # me llamo por mi nombre: no hay ambiguedad
         return round(min(score, 1.0), 3)
+
+    def unavailable(self, ctx: SkillContext) -> str:
+        """Que puerto falta para poder trabajar. Cadena vacia = todo listo."""
+        if not self.needs:
+            return ""
+        if ctx.system is None:
+            return "no tengo acceso al sistema en esta plataforma"
+        faltan = [n for n in self.needs if getattr(ctx.system, n, None) is None]
+        return f"me falta acceso a: {', '.join(faltan)}" if faltan else ""
 
     @abstractmethod
     async def run(self, ctx: SkillContext) -> SkillResult:
@@ -71,4 +119,4 @@ class Skill(ABC):
 
     def spec(self) -> dict[str, Any]:
         return {"name": self.name, "description": self.description,
-                "triggers": self.triggers}
+                "triggers": self.triggers, "needs": list(self.needs)}
