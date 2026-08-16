@@ -1,12 +1,19 @@
-# F.R.I.D.A.Y OS
+# F.R.I.D.A.Y
 
-Asistente por voz con memoria en markdown enlazado, HUD tipo terminal y motor
-intercambiable. Corre en tu equipo. El audio no sale de aquí.
+Acompañante de escritorio con voz local, memoria en markdown enlazado y acceso
+real a la computadora. **No es una aplicación web.** Es una ventana del sistema
+—sin marco, flotando sobre tu escritorio— que abre programas, busca archivos,
+lee lo que tienes en pantalla y recuerda.
 
 ```
-  tu voz ─▶ PTT ─▶ STT local ─▶ Router ─▶ Skill ─▶ vault/*.md ─▶ TTS local ─▶ bocinas
-                                   │                  │                │
-                                   └──────────── HUD (websocket) ──────┘
+tu voz ─▶ PTT ─▶ STT local ─▶ Router ─▶ Skill ─┬─▶ vault/*.md   memoria
+                                     │         ├─▶ sistema      apps · ventanas · web
+                                     │         ├─▶ archivos     buscar · ordenar · renombrar
+                                     │         └─▶ pantalla     contexto de lo que ves
+                                     │
+                               Política ─── nada con efecto pasa sin permiso
+                                     │
+                          Acompañante (Qt/QML) ─▶ TTS local
 ```
 
 ---
@@ -14,57 +21,112 @@ intercambiable. Corre en tu equipo. El audio no sale de aquí.
 ## Arranque
 
 ```powershell
-.\scripts\setup.ps1     # venv + dependencias + modelo de voz (una vez)
-.\scripts\run.ps1       # voz + HUD
+.\scripts\setup.ps1              # venv + dependencias + modelo de voz (una vez)
+.\scripts\run.ps1                # acompañante + voz
 ```
 
-El HUD abre solo en `http://127.0.0.1:8787`, en ventana de app sin pestañas.
-**Mantén ESPACIO y habla.** Suelta y FRIDAY trabaja.
+**Mantén ESPACIO y habla.** El orbe aparece en la esquina, el icono queda en la
+bandeja del sistema.
 
 | Comando | Qué hace |
 |---|---|
-| `.\scripts\run.ps1` | todo: voz + HUD |
-| `.\scripts\run.ps1 -NoVoice` | solo HUD, escribes en vez de hablar |
-| `.\scripts\run.ps1 -NoHud` | solo consola |
-| `.\scripts\run.ps1 -Check` | diagnóstico de dependencias |
-| `.\scripts\run.ps1 -Say "dame las metricas"` | una petición y sale |
+| `.\scripts\run.ps1` | acompañante + voz |
+| `.\scripts\run.ps1 -Silent` | sin ventana de consola detrás |
+| `.\scripts\run.ps1 -NoVoice` | acompañante sin micrófono, escribes |
+| `.\scripts\run.ps1 -Console` | sin ventana, solo terminal |
+| `.\scripts\run.ps1 -Preview` | solo la interfaz, con datos de muestra |
+| `.\scripts\run.ps1 -Check` | diagnóstico |
+| `.\scripts\run.ps1 -Say "abre spotify"` | una petición y sale |
 
 ---
 
-## Las 5 skills
+## El acompañante
+
+Un orbe holográfico: anillos concéntricos girando en distintos ejes y
+velocidades, núcleo incandescente, partículas orbitales. Ámbar sobre fondo
+profundo. El panel de cristal se despliega solo cuando hay algo que decir.
+
+El orbe **responde al estado**: escuchar lo abre y aclara al oro, pensar acelera
+el giro, hablar lo calma, un error lo vira a rojo. El nivel de tu voz lo hace
+respirar en tiempo real.
+
+Cada anillo se dibuja **una sola vez**; después solo se anima su transform. La
+rotación vive en el hilo de render, así que el orbe puede girar todo el día sin
+castigar la CPU.
+
+Arrástralo desde el orbe. Clic derecho para el menú, doble clic para escribir.
+
+---
+
+## Las 8 skills
 
 FRIDAY enruta sola. No hay que invocarlas por nombre.
 
-| Skill | Para qué | Se dispara con |
-|---|---|---|
-| **metricas** | jala números: CPU/RAM/disco + métricas del vault | *"dame las métricas"*, *"cómo va el equipo"* |
-| **inbox** | resumen matutino: qué cayó, qué quedó abierto | *"buenos días"*, *"ponme al día"* |
-| **plan** | escribe el top 3 del día y lo fija | *"arma el plan"*, *"por dónde empiezo"* |
-| **vault** | lee y escribe memoria | *"recuerda que…"*, *"qué sabes de…"* |
-| **agenda** | qué viene en los próximos 7 días | *"qué tengo hoy"*, *"agéndame…"* |
+### Sobre la computadora
+
+| Skill | Ejemplos |
+|---|---|
+| **sistema** | *"abre Spotify"* · *"qué tengo abierto"* · *"enfoca Chrome"* · *"busca en YouTube …"* |
+| **archivos** | *"organiza mis descargas"* · *"busca el archivo presupuesto"* · *"renombra …"* |
+| **pantalla** | *"qué estoy viendo"* · *"explícame esto"* |
+
+### Sobre tu memoria
+
+| Skill | Ejemplos |
+|---|---|
+| **vault** | *"recuerda que …"* · *"qué sabes de …"* |
+| **agenda** | *"qué tengo hoy"* · *"agéndame … el viernes"* |
+| **plan** | *"arma el plan"* · *"por dónde empiezo"* |
+| **inbox** | *"buenos días"* · *"ponme al día"* |
+| **metricas** | *"dame las métricas"* |
 
 El enrutado tiene dos caminos: **rápido** (regex, 0 ms, sin motor) y **pensado**
-(el motor clasifica). Nombrar la skill gana siempre — *"…en la **agenda**"* va a
-`agenda` aunque la frase también suene a `inbox`.
+(el motor clasifica). El puntaje pesa la *especificidad* del disparador, no su
+cobertura — por eso *"qué tengo abierto"* va a `sistema` y no a `inbox`, aunque
+ambos reconozcan *"qué tengo"*.
 
-### Métricas desde tus notas
-
-Cualquier nota puede aportar números, con frontmatter o en línea:
-
-```markdown
 ---
-metric: 12
----
-velocidad:: 12 pts
-bugs abiertos:: 7
+
+## La política: por qué es seguro
+
+El STT se equivoca. *"Organiza mis descargas"* mal reconocido no puede
+convertirse en un desastre. Por eso **toda acción con efecto pasa por un
+guardia** que devuelve uno de tres veredictos: permitir, confirmar o denegar.
+
+```toml
+[policy]
+allow_launch       = true
+allow_file_write   = true
+allow_shell        = false        # apagado por defecto
+confirm_over_files = 5            # sobre esto, pide confirmación hablada
+write_roots  = ["~/Documents", "~/Downloads", "~/Desktop", "~/Pictures"]
+blocked_apps = ["regedit*", "diskpart*", "cmd.exe", "powershell*"]
 ```
+
+Además hay un suelo **no configurable**: `C:\Windows`, `Program Files`,
+`ProgramData` y las extensiones críticas (`.sys`, `.dll`, `.msi`…) están
+bloqueados aunque aflojes la config.
+
+Y la separación que lo hace funcionar: **planear y aplicar son operaciones
+distintas.** FRIDAY primero describe qué va a pasar —cuántos archivos, a dónde,
+con una muestra— y solo toca el disco si dices **sí**.
+
+```
+› organiza mis descargas
+  199 movimientos planeados · Documentos 50 · Comprimidos 41 · Imágenes 30
+  ¿Confirmas?
+› sí
+  Patrón integrado. 199 aplicadas.
+```
+
+Nada se sobrescribe nunca: si el destino existe, se añade un sufijo.
 
 ---
 
 ## La memoria: solo archivos
 
-Sin base de datos. Sin índice que se corrompa. Sin formato propietario.
-Si borras FRIDAY, tus notas siguen ahí y las abre cualquier editor de texto.
+Sin base de datos. Sin índice que se corrompa. Si borras FRIDAY, tus notas
+siguen ahí y las abre cualquier editor de texto.
 
 ```
 vault/
@@ -73,27 +135,24 @@ vault/
 └── outputs/    lo que FRIDAY produce — Briefing, Plan, resúmenes
 ```
 
-**Abrir en Obsidian:** *Open folder as vault* → elige `FRIDAY-OS/vault`.
-El grafo aparece solo, sin plugins. Ya viene con tema oscuro y wikilinks
-configurados en `vault/.obsidian/`.
+**Obsidian:** *Open folder as vault* → elige `vault/`. El grafo aparece solo,
+sin plugins. Ya viene configurado con acento ámbar y colores por zona.
 
-El grafo se construye en memoria al vuelo leyendo los `[[enlaces]]`. Da
-backlinks, vecinos, huérfanas y enlaces rotos. Di **"reparar grafo"** y crea
-stubs para todo enlace roto: la memoria se cierra sola.
+Di **"reparar grafo"** y crea stubs para todo enlace roto: la memoria se cierra
+sola.
 
 ---
 
 ## Voz: por qué es privada de verdad
 
-- **STT** — `faster-whisper` en tu CPU/GPU. El modelo se baja **una vez** y de ahí
-  es offline.
-- **TTS** — Piper (ONNX local) o las voces SAPI5 de Windows. Ninguna llama a nadie.
-- **PTT** — hotkey global, el audio vive en RAM y se descarta al transcribir.
+- **STT** — `faster-whisper` en tu CPU/GPU. El modelo se baja **una vez**; de ahí, offline.
+- **TTS** — Piper (ONNX local) o las voces SAPI5 de Windows.
+- **PTT** — hotkey global; el audio vive en RAM y se descarta al transcribir.
 
 Y no te pedimos que confíes en la palabra: mientras el pipeline de audio corre,
-`core/privacy.py` intercepta `socket.connect` y **revienta cualquier conexión que
-no sea loopback**. Si una dependencia intentara mandar tu voz a algún lado, lo ves
-en el HUD como error. La prueba de humo lo verifica, incluso entre hilos.
+`core/privacy.py` intercepta `socket.connect` y **revienta cualquier conexión
+que no sea loopback**. Si una dependencia intentara mandar tu voz a algún lado,
+lo ves como error. Las pruebas lo verifican, incluso entre hilos.
 
 Primera vez, para permitir la descarga del modelo:
 
@@ -112,87 +171,65 @@ Una línea en `config/friday.toml`:
 backend = "claude_code"   # claude_code | ollama | openai_compat
 ```
 
-| Backend | Para qué |
-|---|---|
-| `claude_code` | Claude Code headless. El más capaz. |
-| `ollama` | cualquier modelo local de Ollama |
-| `openai_compat` | llama.cpp server, LM Studio, vLLM, text-generation-webui |
-
 Con `claude_code`, FRIDAY lo corre **sin herramientas** (`--tools ""`) y con su
 propio system prompt: un LLM puro, entra texto y sale texto. Los archivos los
-escribe FRIDAY en Python. Así el motor no puede tocar tu vault por accidente, y
-cambiarlo por un modelo local no rompe nada.
-
-> Nota Windows: el prompt viaja por **stdin**, no por argv. El shim `.CMD` de npm
-> destroza los argumentos largos con saltos de línea.
+escribe FRIDAY en Python. Así el motor no puede tocar tu disco por accidente, y
+cambiarlo por un modelo local de 8B no rompe nada.
 
 ---
 
-## El HUD
+## Arquitectura
 
-Una sola pantalla. Sin pestañas. Sin menús.
-
-- **vitales** — CPU / RAM / disco en anillos, uptime, batería, red
-- **audio i/o** — nivel en vivo, forma de onda, estado del PTT
-- **comandos** — atajos clicables
-- **salida** — la respuesta en markdown, con `[[enlaces]]` clicables que consultan el vault
-- **transcripción** — lo que dijiste y lo que contestó, con hora
-- **agenda** — próximos 7 días, vencidos en rojo
-- **vault** — notas, enlaces, tags, palabras y el grafo dibujado
-- **skills** — se encienden cuando se usan
-
-Temas: `amber` (default), `cyan`, `ice` en `[hud] theme`.
-También puedes escribir en vez de hablar: la barra de abajo acepta texto.
-
----
-
-## Estructura
+Bajo acoplamiento por construcción, no por disciplina.
 
 ```
-FRIDAY-OS/
-├── friday.py           orquestador
-├── config/
-│   ├── friday.toml     TODA la configuración
-│   └── persona.md      tono de FRIDAY (no formato)
-├── core/
-│   ├── bus.py          pub/sub asíncrono — nadie importa a nadie
-│   ├── config.py       carga del toml
-│   ├── engine.py       adaptadores: claude_code | ollama | openai_compat
-│   ├── router.py       enrutado rápido + pensado
-│   └── privacy.py      candado de red del audio
-├── memory/
-│   ├── vault.py        markdown, frontmatter, wikilinks, búsqueda
-│   └── graph.py        grafo en memoria, backlinks, reparación
-├── skills/             las 5 manos
-├── voice/              ptt · stt · tts
-├── hud/                servidor + La Cara
-└── scripts/            setup · run · smoke_test
+friday.py              orquestador — el único que conoce a todos
+config/                friday.toml (todo) · persona.md (tono)
+core/
+  bus.py               pub/sub asíncrono: nadie importa a nadie
+  engine.py            adaptadores de motor
+  router.py            confirmación → rápido → pensado
+  policy.py            el guardia de permisos
+  privacy.py           candado de red del audio
+memory/                vault.py (markdown) · graph.py (enlaces)
+system/
+  ports.py             ⭐ los Protocol: la inversión de dependencias
+  factory.py           lo único que sabe en qué SO corre
+  files.py · web.py    implementaciones multiplataforma
+  win32/               implementaciones de Windows
+skills/                las 8 manos
+voice/                 ptt · stt · tts
+desktop/
+  app.py               ventana nativa + bandeja
+  bridge.py            única frontera Python ↔ QML
+  qml/                 Orb · Ring · Companion · GlowButton
 ```
 
----
+**`system/ports.py` es la pieza clave.** Las skills dependen de `Protocol`
+abstractos, nunca de `win32/`. Y las interfaces están segregadas: `FileIndex`
+solo lee — una skill que busca archivos es *incapaz* de borrarlos, no por
+disciplina sino por tipo.
 
-## Agregar una skill
+### Agregar una skill
 
-Tres pasos, sin tocar el núcleo:
+1. `skills/mi_skill.py` heredando de `Skill` (`name`, `description`,
+   `triggers`, `needs`, `async run(ctx)`).
+2. Regístrala en `ALL_SKILLS` de `skills/__init__.py`.
+3. Añádela a `skills.enabled` del toml.
 
-1. `skills/mi_skill.py` con una clase que herede de `Skill` (`name`,
-   `description`, `triggers`, `async run(ctx) -> SkillResult`).
-2. Regístrala en `ALL_SKILLS` dentro de `skills/__init__.py`.
-3. Añádela a `skills.enabled` en el toml.
-
-`ctx` trae `vault`, `graph`, `engine`, `cfg` y `text`. Nada global.
+`ctx` trae `vault`, `graph`, `engine`, `system`, `policy` y `text`. Nada global.
 
 ---
 
 ## Pruebas
 
 ```powershell
-.\.venv\Scripts\python scripts\smoke_test.py
+.\.venv\Scripts\python scripts\smoke_test.py     # 35 · memoria, skills, privacidad
+.\.venv\Scripts\python scripts\system_test.py    # 31 · política, puertos, confirmación
 ```
 
-35 pruebas sobre vault temporal y motor simulado: frontmatter, enlaces, grafo,
-búsqueda, escape de rutas, enrutado, las 5 skills, y el candado de privacidad.
-No toca tu vault real ni gasta llamadas al motor.
+Ambas sobre directorios temporales y motor simulado: no tocan tu vault real, no
+mueven tus archivos y no gastan llamadas al motor.
 
 ---
 
@@ -201,7 +238,9 @@ No toca tu vault real ni gasta llamadas al motor.
 | Síntoma | Causa |
 |---|---|
 | `faster-whisper` no instala | Python 3.14 aún no tiene wheels. Usa 3.12. |
-| El PTT no responde | `pynput` necesita foco de escritorio; en apps como admin, corre FRIDAY como admin. |
-| Se oye vacío / no transcribe | Micrófono virtual (Voicemod, VB-Cable) como entrada por defecto. Cámbialo en Windows. |
-| STT dice "modelo no descargado" | El candado bloqueó la descarga. Corre con `--allow-model-download`. |
-| El motor tarda mucho | Baja `engine.timeout_s` o usa `ollama` con un modelo chico. |
+| El PTT no responde | `pynput` necesita foco de escritorio; con apps como admin, corre FRIDAY como admin. |
+| No transcribe | Micrófono virtual (Voicemod, VB-Cable) como entrada por defecto. Cámbialo en Windows. |
+| STT dice "modelo no descargado" | El candado bloqueó la descarga. Usa `--allow-model-download`. |
+| "Fuera de las carpetas donde puedo escribir" | La política funcionando. Añade la ruta a `write_roots`. |
+| No puedo enfocar una ventana | Windows bloquea `SetForegroundWindow` desde procesos sin foco. FRIDAY la marca en la barra. |
+| El panel se ve translúcido de más | Activa `[desktop] backdrop = "acrylic"` para desenfoque real de Windows 11. |
