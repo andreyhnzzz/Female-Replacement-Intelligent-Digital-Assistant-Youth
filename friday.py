@@ -35,6 +35,7 @@ from core import privacy
 from core.bus import BUS
 from core.config import load as load_config
 from core.engine import build_engine
+from core.logbook import Logbook
 from core.policy import Policy
 from core.router import Router
 from memory.graph import Graph
@@ -170,10 +171,10 @@ class Friday:
         def _load_stt() -> None:
             # el sello es por hilo: va DENTRO del worker o no protege nada
             if allow_dl:
-                self.stt.load()
+                self.stt.load(allow_download=True)
             else:
                 with privacy.sealed():
-                    self.stt.load()
+                    self.stt.load(allow_download=False)
 
         try:
             await asyncio.to_thread(_load_stt)
@@ -211,6 +212,11 @@ class Friday:
     async def start(self, loop: asyncio.AbstractEventLoop | None = None) -> None:
         self.loop = loop or asyncio.get_running_loop()
         self.bus.bind_loop(self.loop)
+
+        # Bitacora: sin esto, cuando algo no arranca no hay forma de saber
+        # si fallo el modelo, el hotkey o el microfono.
+        self.logbook = Logbook(self.bus, self.cfg.root / "logs" / "friday.log",
+                               echo=bool(self.args.console or self.args.verbose))
 
         if self.cfg.get("privacy.local_only_audio", True):
             privacy.install(
@@ -380,6 +386,8 @@ def main() -> int:
     ap.add_argument("--console", action="store_true", help="sin ventana, solo terminal")
     ap.add_argument("--say", metavar="TEXTO", help="una peticion y sale")
     ap.add_argument("--check", action="store_true", help="diagnostico")
+    ap.add_argument("--verbose", "-v", action="store_true",
+                    help="vuelca la bitacora del bus a la consola")
     ap.add_argument("--allow-model-download", action="store_true",
                     help="permite bajar el modelo de voz la primera vez")
     args = ap.parse_args()
