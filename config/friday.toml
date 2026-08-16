@@ -7,18 +7,75 @@
 [identity]
 name         = "F.R.I.D.A.Y"
 long_name    = "Female Replacement Intelligent Digital Assistant Youth"
-user_title   = "Boss"                  # como te llama FRIDAY
+user_title   = "Jefe"                  # como te llama FRIDAY
 language     = "es"
 persona_file = "config/persona.md"
 
 # ----------------------------------------------------------
 # MOTOR  —  quien piensa.
-# backend: claude_code | ollama | openai_compat
+#
+# `backend` es solo el arranque. A partir de ahi el roster manda:
+# «cambia a Sonnet» conmuta en caliente sin reiniciar nada.
+#
+# adaptadores: claude_code | anthropic_api | ollama | openai_compat
 # ----------------------------------------------------------
 [engine]
-backend      = "claude_code"
-timeout_s    = 180
-max_turns    = 6
+backend       = "claude_code"
+default_model = "opus"        # una `key` del roster de abajo
+timeout_s     = 180
+max_turns     = 6
+
+# ── el roster ────────────────────────────────────────────
+# Cada entrada es un modelo alcanzable y COMO PEDIRLO HABLANDO.
+# `say` son los alias que el STT puede producir: incluye las
+# variantes mal transcritas, salen gratis y evitan un «no te
+# entendi» cada vez que el reconocedor escribe «soneto».
+#
+# Gana el alias mas largo que aparezca en la frase.
+
+[[engine.roster]]
+key     = "opus"
+label   = "Opus 5"
+backend = "claude_code"
+model   = "claude-opus-5"
+say     = ["opus", "opus cinco", "el grande", "el profundo"]
+note    = "razonamiento profundo; el mas lento de los tres"
+
+[[engine.roster]]
+key     = "sonnet"
+label   = "Sonnet 5"
+backend = "claude_code"
+model   = "claude-sonnet-5"
+say     = ["sonnet", "soneto", "sonet", "el equilibrado"]
+note    = "equilibrio entre calidad y latencia; el de diario"
+
+[[engine.roster]]
+key     = "haiku"
+label   = "Haiku 4.5"
+backend = "claude_code"
+model   = "claude-haiku-4-5-20251001"
+say     = ["haiku", "aiku", "jaiku", "el rapido"]
+note    = "respuesta inmediata para ordenes cortas"
+
+# El mismo Claude, pero por HTTP directo: sin levantar Node ni
+# cruzar el shim .CMD de npm. Es el camino corto y se nota en
+# cada turno hablado. Necesita ANTHROPIC_API_KEY y factura por
+# token, mientras que `claude_code` viaja en tu suscripcion.
+[[engine.roster]]
+key     = "directo"
+label   = "Opus 5 directo"
+backend = "anthropic_api"
+model   = "claude-opus-5"
+say     = ["directo", "api", "modo rapido", "por api"]
+note    = "el mismo Opus sin el arranque de Claude Code"
+
+[[engine.roster]]
+key     = "local"
+label   = "Llama 3.1 8B"
+backend = "ollama"
+model   = "llama3.1:8b"
+say     = ["local", "llama", "sin nube", "offline", "el local"]
+note    = "corre en tu maquina; nada sale del equipo"
 
 [engine.claude_code]
 binary          = "claude"
@@ -27,14 +84,25 @@ permission_mode = "acceptEdits"
 # solo se usan en modo agentico; el razonamiento corre sin herramientas
 allowed_tools   = ["Read", "Write", "Edit", "Glob", "Grep"]
 
+[engine.anthropic_api]
+base_url    = "https://api.anthropic.com"
+model       = "claude-opus-5"
+max_tokens  = 2048
+api_key_env = "ANTHROPIC_API_KEY"     # se lee del entorno, no del disco
+
 [engine.ollama]
 host  = "http://127.0.0.1:11434"
 model = "llama3.1:8b"
 
+# Habla el dialecto /chat/completions. Sirve para lo local
+# (llama.cpp, LM Studio, vLLM) y para lo remoto: OpenAI, Groq,
+# OpenRouter, DeepSeek y la capa compatible de Gemini. Cambiar
+# de proveedor es base_url + api_key_env, sin codigo nuevo.
 [engine.openai_compat]
-base_url = "http://127.0.0.1:8080/v1"
-model    = "local-model"
-api_key  = "not-needed"
+base_url    = "http://127.0.0.1:8080/v1"
+model       = "local-model"
+api_key     = "not-needed"
+api_key_env = ""                      # p.ej. "OPENAI_API_KEY" si vas a la nube
 
 # ----------------------------------------------------------
 # ACOMPANANTE  —  la ventana flotante.
@@ -44,13 +112,26 @@ width         = 760
 height        = 460
 corner        = "bottom-right"   # bottom-right | bottom-left | top-right | top-left
 margin        = 24
-level_ms      = 60               # refresco del nivel de audio del orbe
+level_ms      = 60               # refresco del nivel de audio del nucleo
 always_on_top = true
 # Desenfoque real de Windows 11 tras la ventana: none | acrylic | mica | tabbed
-# «none» deja el orbe flotando sobre el escritorio (recomendado).
-# «acrylic» da cristal de verdad, pero el efecto cubre TODA la ventana y el
-# orbe pierde el fondo transparente. Es una eleccion estetica.
+# «none» deja el nucleo flotando sobre el escritorio (recomendado).
 backdrop      = "none"
+
+# ── el nucleo holografico ────────────────────────────────
+# quick3d    escena 3D real: camara en perspectiva, nube de nodos
+#            con profundidad, bloom y desenfoque de campo.
+# projected  plan B en 2.5D sobre Canvas. Sin dependencia de
+#            QtQuick3D ni del driver. Si el nucleo no aparece o
+#            la ventana parpadea, cambia a esto.
+[desktop.core]
+mode        = "quick3d"
+nodes       = 1400          # puntos de la nube; 600 en equipos justos
+spokes      = 28            # radios que salen del nucleo
+dust        = 260           # polvo orbital
+bloom       = true
+depth_field = true          # el desenfoque cinematografico del fondo
+fov         = 42
 
 # ----------------------------------------------------------
 # SISTEMA  —  las manos sobre la computadora.
@@ -61,6 +142,46 @@ max_scan         = 40000     # tope de archivos por busqueda
 search_engine    = "default" # default | google | bing | youtube | github | wikipedia
 allow_ocr        = false     # requiere tesseract instalado
 screen_max_chars = 4000
+page_max_chars   = 12000     # cuanto texto de una pagina llega al motor
+fetch_timeout_s  = 12
+# Contacto que viaja en el User-Agent cuando FRIDAY sale a la red.
+# NO es opcional en la practica: Wikimedia devuelve 403 a todo si no hay una
+# forma de contacto entre parentesis (y bloquea los agentes que fingen ser
+# Chrome). Pon tu correo o la URL de tu repo.
+contact          = "https://github.com/topics/friday-desktop-companion"
+
+# ----------------------------------------------------------
+# NOTICIAS  —  fuentes RSS. FRIDAY no raspa portadas: lee
+# exactamente los feeds que declares aqui.
+# ----------------------------------------------------------
+[news]
+timeout_s  = 10
+per_source = 8
+
+[[news.sources]]
+name  = "Xataka"
+topic = "tecnologia"
+url   = "https://www.xataka.com/feedburner.xml"
+
+[[news.sources]]
+name  = "Genbeta"
+topic = "tecnologia"
+url   = "https://www.genbeta.com/feedburner.xml"
+
+[[news.sources]]
+name  = "BBC Mundo"
+topic = "mundo"
+url   = "https://feeds.bbci.co.uk/mundo/rss.xml"
+
+[[news.sources]]
+name  = "El Pais Portada"
+topic = "general"
+url   = "https://feeds.elpais.com/mrss-s/pages/ep/site/elpais.com/portada"
+
+[[news.sources]]
+name  = "El Pais Ciencia"
+topic = "ciencia"
+url   = "https://feeds.elpais.com/mrss-s/pages/ep/site/elpais.com/section/ciencia/portada"
 
 # ----------------------------------------------------------
 # POLITICA  —  el guardia. Nada con efecto pasa sin permiso.
@@ -72,7 +193,8 @@ enabled            = true
 allow_launch       = true     # abrir aplicaciones
 allow_file_write   = true     # mover, renombrar, organizar
 allow_shell        = false    # ejecutar comandos crudos: apagado por defecto
-allow_web          = true     # abrir busquedas en el navegador
+allow_web          = true     # abrir busquedas en TU navegador
+allow_web_fetch    = true     # que FRIDAY salga a la red por su cuenta
 confirm_over_files = 5        # sobre este numero, pide confirmacion hablada
 
 # Donde PUEDE escribir. Fuera de aqui, no.
@@ -81,6 +203,8 @@ write_roots = ["~/Documents", "~/Downloads", "~/Desktop", "~/Pictures"]
 read_roots  = ["~"]
 # Nunca se lanzan, aunque esten instalados.
 blocked_apps = ["regedit*", "diskpart*", "cmd.exe", "powershell*"]
+# Nunca se descargan. La red local ya esta bloqueada de fabrica.
+blocked_hosts = []
 
 # ----------------------------------------------------------
 # MEMORIA  —  solo markdown. Sin base de datos. Nunca.
@@ -100,8 +224,8 @@ index_ttl_s  = 3
 enabled = true
 
 [voice.ptt]
-key            = "space"
-mode           = "hold"
+key            = "f9"
+mode           = "toggle"      # toggle: pulsa para abrir, pulsa para cerrar
 require_focus  = false
 min_duration_s = 0.35
 max_duration_s = 60.0
@@ -127,7 +251,8 @@ volume    = 0.9
 # ----------------------------------------------------------
 [skills]
 enabled = ["metricas", "inbox", "plan", "vault", "agenda",
-           "sistema", "archivos", "pantalla"]
+           "sistema", "archivos", "pantalla",
+           "noticias", "web", "motor"]
 
 [skills.metricas]
 sources         = ["vault/wiki", "vault/raw"]
@@ -161,6 +286,14 @@ rename_pattern = "{date} — {name}"
 
 [skills.pantalla]
 log_reads = true             # cada lectura de pantalla queda anotada
+
+[skills.noticias]
+max_items = 12
+archive   = true             # deja el briefing en outputs/
+write_to  = "outputs"
+
+[skills.web]
+max_chars = 12000
 
 # ----------------------------------------------------------
 # PRIVACIDAD  —  candados duros

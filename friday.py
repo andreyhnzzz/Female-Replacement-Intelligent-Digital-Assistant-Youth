@@ -194,8 +194,7 @@ class Friday:
             self.ptt = PushToTalk(self.cfg, self.bus)
             self.ptt.on_utterance = self._on_utterance
             await asyncio.to_thread(self.ptt.start)
-            await self.bus.emit("core.info",
-                                message=f"manten {self.ptt.key_name.upper()} y habla")
+            await self.bus.emit("core.info", message=f"{self.ptt.hint} y habla")
 
     # ══════════════════════════════════════════ latido
     async def _tick(self) -> None:
@@ -222,10 +221,20 @@ class Friday:
             privacy.install(
                 reporter=lambda m: self.bus.emit_threadsafe("core.error", message=m))
 
+        # El modelo activo se anuncia ANTES del chequeo de salud: si el motor
+        # esta caido, saber cual lo esta es la mitad del diagnostico.
+        spec = getattr(self.engine, "spec", None)
+        if spec is not None:
+            await self.bus.emit("engine.switched", key=spec.key, label=spec.label,
+                                backend=spec.backend, model=spec.model, previous="")
+
         ok, _info = await self.engine.health()
         self.status["engine_ok"] = ok
-        await self.bus.emit("core.info",
-                            message=f"motor {self.engine.name}: {'listo' if ok else 'caido'}")
+        self.status["model"] = spec.label if spec else self.engine.name
+        await self.bus.emit(
+            "core.info",
+            message=f"motor {getattr(self.engine, 'label', self.engine.name)}: "
+                    f"{'listo' if ok else 'caido'}")
 
         activas = [k for k, v in self.system.available().items() if v]
         await self.bus.emit("core.info",
@@ -282,7 +291,9 @@ def run_companion(fri: Friday) -> int:
 
     print(BANNER)
     print(f"  vault  : {fri.vault.root}")
-    print(f"  motor  : {fri.engine.name}")
+    print(f"  motor  : {getattr(fri.engine, 'label', fri.engine.name)}")
+    print(f"  modelos: {', '.join(s.key for s in fri.engine.available())}")
+    print(f"  voz    : {fri.cfg.ptt_hint()} y habla")
     print(f"  sistema: {', '.join(k for k, v in fri.system.available().items() if v)}")
     print("\n  El acompañante esta en tu escritorio. Cierra desde la bandeja.\n")
 
@@ -327,6 +338,13 @@ async def check(cfg_path: str | None) -> int:
     eng = build_engine(cfg)
     ok, info = await eng.health()
     rows.append((f"motor · {eng.name}", ok, info, True))
+    for spec in eng.available():
+        active = eng.spec is not None and spec.key == eng.spec.key
+        rows.append((f"modelo · {spec.key}{' (activo)' if active else ''}",
+                     spec.backend in ("claude_code", "anthropic_api",
+                                      "ollama", "openai_compat"),
+                     f"{spec.model} · di «{spec.say[0] if spec.say else spec.key}»",
+                     False))
 
     for mod, label, req in [
         ("numpy", "numpy", True), ("psutil", "vitales", True),

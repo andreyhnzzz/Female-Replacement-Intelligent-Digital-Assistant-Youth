@@ -8,10 +8,13 @@ from .archivos import ArchivosSkill
 from .base import PendingAction, Skill, SkillContext, SkillResult
 from .inbox import InboxSkill
 from .metricas import MetricasSkill
+from .motor import MotorSkill
+from .noticias import NoticiasSkill
 from .pantalla import PantallaSkill
 from .plan import PlanSkill
 from .sistema import SistemaSkill
 from .vault import VaultSkill
+from .web import WebSkill
 
 if TYPE_CHECKING:
     from core.config import Config
@@ -27,6 +30,11 @@ ALL_SKILLS: dict[str, type[Skill]] = {
     "sistema": SistemaSkill,
     "archivos": ArchivosSkill,
     "pantalla": PantallaSkill,
+    # el mundo de fuera
+    "noticias": NoticiasSkill,
+    "web": WebSkill,
+    # sobre si misma
+    "motor": MotorSkill,
 }
 
 
