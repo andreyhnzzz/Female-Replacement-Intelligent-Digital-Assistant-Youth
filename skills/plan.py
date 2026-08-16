@@ -39,7 +39,7 @@ class PlanSkill(Skill):
         extra = ctx.text.strip()
 
         prompt = (
-            f"Elige las {top_n} cosas que {ctx.cfg.get('identity.user_title', 'Boss')} "
+            f"Elige las {top_n} cosas que {ctx.cfg.get('identity.user_title', 'Jefe')} "
             f"debe hacer HOY ({datetime.now().strftime('%A %d de %B')}).\n\n"
             f"PENDIENTES DISPONIBLES:\n{pool}\n\n"
             f"TEMAS CENTRALES DEL VAULT: {hubs or '(ninguno)'}\n"

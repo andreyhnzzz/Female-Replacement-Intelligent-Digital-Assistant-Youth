@@ -43,7 +43,7 @@ class InboxSkill(Skill):
         todo_txt = "\n".join(f"- [ ] {t}  <- [[{src}]]" for src, t in open_todos[:20]) or "(ninguno)"
 
         prompt = (
-            f"Genera el briefing matutino de {ctx.cfg.get('identity.user_title', 'Boss')}.\n\n"
+            f"Genera el briefing matutino de {ctx.cfg.get('identity.user_title', 'Jefe')}.\n\n"
             f"NOTAS TOCADAS EN LAS ULTIMAS {hours}H:\n" + ("\n".join(digest) or "(nada)") +
             f"\n\nPENDIENTES ABIERTOS:\n{todo_txt}\n"
             f"\nCERRADOS HOY: {len(done_today)}\n\n"
