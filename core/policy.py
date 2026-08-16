@@ -64,8 +64,10 @@ class Policy:
         self.allow_file_write = bool(cfg.get(f"{p}.allow_file_write", True))
         self.allow_shell = bool(cfg.get(f"{p}.allow_shell", False))
         self.allow_web = bool(cfg.get(f"{p}.allow_web", True))
+        self.allow_web_fetch = bool(cfg.get(f"{p}.allow_web_fetch", True))
         self.confirm_over = int(cfg.get(f"{p}.confirm_over_files", 5))
         self.blocked_apps = [a.lower() for a in cfg.get(f"{p}.blocked_apps", [])]
+        self.blocked_hosts = [h.lower() for h in cfg.get(f"{p}.blocked_hosts", [])]
 
         root = Path(cfg.root) if hasattr(cfg, "root") else Path.cwd()
         self.write_roots = self._resolve_roots(
@@ -184,6 +186,42 @@ class Policy:
                             "policy.allow_web")
         return Decision(Verdict.ALLOW)
 
+    def can_fetch(self, url: str) -> Decision:
+        """Descargar una pagina para leerla. Distinto de abrirla.
+
+        `can_web` autoriza entregarle una URL al navegador del usuario: la
+        peticion la hace Chrome, con su sesion y sus cookies. `can_fetch`
+        autoriza que **FRIDAY** salga a la red por su cuenta. Es un permiso
+        mas fuerte y por eso tiene su propio interruptor.
+        """
+        if not self.enabled:
+            return Decision(Verdict.ALLOW, "politica desactivada")
+        if not self.allow_web_fetch:
+            return Decision(Verdict.DENY, "leer paginas de la red esta deshabilitado",
+                            "policy.allow_web_fetch")
+
+        low = url.strip().lower()
+        if not low.startswith(("http://", "https://")):
+            return Decision(Verdict.DENY, "solo http/https", "hard-deny")
+
+        host = low.split("://", 1)[1].split("/", 1)[0].split("@")[-1].split(":")[0]
+        if not host:
+            return Decision(Verdict.DENY, "URL sin host", "hard-deny")
+
+        # La red local no es «la web». Que una URL dictada por voz alcance el
+        # router o un servicio interno no es una funcion, es un accidente.
+        if host in ("localhost", "::1") or host.endswith(".local") or \
+                host.startswith(("127.", "10.", "192.168.", "169.254.")) or \
+                any(host.startswith(f"172.{n}.") for n in range(16, 32)):
+            return Decision(Verdict.DENY, "direccion de red local", "hard-deny")
+
+        for pat in self.blocked_hosts:
+            if fnmatch.fnmatch(host, pat) or pat in host:
+                return Decision(Verdict.DENY, f"«{pat}» esta en la lista negra",
+                                "policy.blocked_hosts")
+
+        return Decision(Verdict.ALLOW)
+
     # ── para el acompanante ───────────────────────────────────────
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -192,6 +230,7 @@ class Policy:
             "file_write": self.allow_file_write,
             "shell": self.allow_shell,
             "web": self.allow_web,
+            "web_fetch": self.allow_web_fetch,
             "confirm_over": self.confirm_over,
             "write_roots": [str(r) for r in self.write_roots],
         }

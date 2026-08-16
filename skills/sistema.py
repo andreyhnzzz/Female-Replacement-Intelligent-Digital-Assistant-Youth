@@ -33,6 +33,11 @@ class SistemaSkill(Skill):
         r"\barranca\b", r"\benfoca\b", r"\bcambia a\b", r"\bventanas\b",
         r"\bqu[eé] tengo abierto\b", r"\bbusca en\b", r"\bgooglea\b",
         r"\bab[rí]eme\b", r"\bprogramas abiertos\b",
+        # «busca gatos en google» tiene el motor al final, no pegado al verbo.
+        # Sin este patron el `\bbusca\b` suelto de `vault` se lo lleva y la
+        # peticion acaba buscando gatos en tus notas.
+        r"\bb[uú]sca(me)?\b.{0,50}\ben (google|youtube|bing|wikipedia|github|"
+        r"maps|duckduckgo)\b",
     ]
     needs = ("apps", "launcher")
 
@@ -77,11 +82,24 @@ class SistemaSkill(Skill):
 
         hits = sys_.apps.find(target, limit=4)
         if not hits:
+            # No esta instalada, pero puede ser un destino. «Abre YouTube» no
+            # es una aplicacion: contestar «no la encuentro» seria cierto e
+            # inutil. Se intenta como sitio antes de rendirse.
+            if sys_.web is not None:
+                url = sys_.web.open_site(target)
+                if url:
+                    return SkillResult(
+                        speak=f"{target} en el navegador.",
+                        display=f"# {target.title()}\n\nAbierto en el navegador.\n\n{url}",
+                        data={"action": "open_site", "site": target, "url": url})
+
             return SkillResult(
                 ok=False, error="no encontrada",
-                speak=f"No encuentro «{target}» instalada.",
+                speak=f"No encuentro «{target}» ni instalada ni como sitio.",
                 display=f"# Sin coincidencia\n\nNo hay ninguna aplicacion que responda "
-                        f"a **{target}**.\n\nPrueba con el nombre exacto del Menu Inicio.",
+                        f"a **{target}**, y tampoco es un sitio que conozca.\n\n"
+                        f"Prueba con el nombre exacto del Menu Inicio, o pideme "
+                        f"que **busque** «{target}».",
                 data={"query": target})
 
         best = hits[0]

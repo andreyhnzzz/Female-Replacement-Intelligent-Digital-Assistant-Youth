@@ -100,6 +100,38 @@ class OpResult:
 
 
 @dataclass(frozen=True, slots=True)
+class NewsItem:
+    """Un titular. Solo lo que vino del feed: nada inferido."""
+    title: str
+    source: str = ""
+    url: str = ""
+    summary: str = ""
+    published: float = 0.0           # epoch; 0 = el feed no lo dijo
+    topic: str = ""                  # la seccion que lo pidio
+
+    def line(self) -> str:
+        return f"- {self.title}" + (f" ({self.source})" if self.source else "")
+
+
+@dataclass(frozen=True, slots=True)
+class PageText:
+    """Una pagina reducida a texto plano.
+
+    `truncated` importa: si el resumen se hizo sobre la mitad del articulo,
+    quien lo lea tiene que poder saberlo.
+    """
+    url: str
+    title: str = ""
+    text: str = ""
+    source: str = ""                 # dominio o api de origen
+    truncated: bool = False
+
+    @property
+    def empty(self) -> bool:
+        return not self.text.strip()
+
+
+@dataclass(frozen=True, slots=True)
 class ScreenContext:
     """Lo que el usuario tiene delante, sin adivinar."""
     active_title: str = ""
@@ -149,6 +181,36 @@ class ScreenReaderPort(Protocol):
     def context(self, with_text: bool = True) -> ScreenContext: ...
 
 
+@runtime_checkable
+class NewsPort(Protocol):
+    """Trae titulares. Solo lee, y solo de fuentes declaradas en el toml.
+
+    Es `async` a diferencia del resto de puertos de lectura: detras hay red,
+    y bloquear el hilo del acompanante mientras cargan seis feeds convertiria
+    el orbe en una estatua. Los puertos locales siguen siendo sincronos
+    porque el disco responde en microsegundos.
+    """
+
+    async def headlines(self, topic: str = "", limit: int = 12) -> list[NewsItem]: ...
+
+    def topics(self) -> list[str]: ...
+
+
+@runtime_checkable
+class PageReaderPort(Protocol):
+    """Descarga una pagina y la deja en texto. No navega ni ejecuta scripts.
+
+    `lookup` existe aparte de `read` porque buscar un tema y leer una URL son
+    problemas distintos: raspar la pagina de resultados de un buscador es
+    fragil y se rompe cada vez que cambian el HTML. Para temas se usa una API
+    estable; `read` queda para cuando ya sabes la direccion.
+    """
+
+    async def read(self, url: str) -> PageText: ...
+
+    async def lookup(self, topic: str) -> PageText | None: ...
+
+
 # ══════════════════════════════════════════════ puertos de ESCRITURA
 @runtime_checkable
 class AppLauncher(Protocol):
@@ -181,9 +243,15 @@ class FileOrganizer(Protocol):
 
 @runtime_checkable
 class WebOpener(Protocol):
-    """Abre busquedas y URLs en el navegador."""
+    """Abre busquedas, sitios y URLs en el navegador del usuario.
+
+    Le entrega el destino a Chrome y se aparta: la sesion y las cookies
+    siguen siendo del usuario. Para que FRIDAY lea el contenido por su
+    cuenta esta `PageReaderPort`, que es otro permiso.
+    """
 
     def search(self, query: str, engine: str = "default") -> str: ...
+    def open_site(self, name: str) -> str: ...
     def open_url(self, url: str) -> bool: ...
 
 
@@ -203,6 +271,8 @@ class SystemAccess:
     organizer: FileOrganizer | None = None
     screen: ScreenReaderPort | None = None
     web: WebOpener | None = None
+    news: NewsPort | None = None
+    pages: PageReaderPort | None = None
 
     def available(self) -> dict[str, bool]:
         return {f: getattr(self, f) is not None for f in self.__slots__}

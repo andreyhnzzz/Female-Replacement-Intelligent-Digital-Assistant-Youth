@@ -13,6 +13,8 @@ from typing import Any
 
 from core.policy import Policy
 from system.files import LocalFileIndex, LocalFileOrganizer
+from system.news import RssNewsReader
+from system.pages import HttpPageReader
 from system.ports import SystemAccess
 from system.web import BrowserWebOpener
 
@@ -25,6 +27,26 @@ def build_system_access(cfg: Any, policy: Policy) -> SystemAccess:
     access.files = index
     access.organizer = LocalFileOrganizer(policy, index)
     access.web = BrowserWebOpener(policy, cfg.get("system.search_engine", "default"))
+
+    # ── red saliente ──────────────────────────────────────────────
+    # Se construyen siempre, pero cada peticion pasa por `can_fetch`: con
+    # `allow_web_fetch = false` el puerto existe y responde «denegado», que
+    # es mas util que un None indistinguible de «esta plataforma no puede».
+    contact = str(cfg.get("system.contact", "") or "")
+    access.news = RssNewsReader(
+        policy,
+        sources=cfg.get("news.sources") or None,
+        timeout_s=float(cfg.get("news.timeout_s", 10)),
+        per_source=int(cfg.get("news.per_source", 8)),
+        contact=contact,
+    )
+    access.pages = HttpPageReader(
+        policy,
+        max_chars=int(cfg.get("system.page_max_chars", 12000)),
+        timeout_s=float(cfg.get("system.fetch_timeout_s", 12)),
+        lang=str(cfg.get("identity.language", "es")),
+        contact=contact,
+    )
 
     # ── especifico de plataforma ──────────────────────────────────
     if sys.platform == "win32":
