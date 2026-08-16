@@ -1,0 +1,11 @@
+{
+  "attachmentFolderPath": "raw/adjuntos",
+  "newLinkFormat": "shortest",
+  "useMarkdownLinks": false,
+  "showLineNumber": true,
+  "readableLineLength": true,
+  "alwaysUpdateLinks": true,
+  "newFileLocation": "folder",
+  "newFileFolderPath": "wiki",
+  "defaultViewMode": "preview"
+}
