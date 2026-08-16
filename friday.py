@@ -1,25 +1,31 @@
 #!/usr/bin/env python3
 """
-F.R.I.D.A.Y OS — orquestador.
+F.R.I.D.A.Y — acompañante de escritorio.
 
-    tu voz -> PTT -> STT local -> Router -> Skill -> Vault(markdown) -> TTS local
-                                     |                                     |
-                                     +------------- HUD --------------------+
+No es una pagina web ni un servidor local: es una ventana del sistema, sin
+marco, flotando sobre tu escritorio, con acceso real a la computadora.
+
+    tu voz ─▶ PTT ─▶ STT local ─▶ Router ─▶ Skill ─┬─▶ vault/*.md
+                                       │           ├─▶ sistema (apps, ventanas)
+                                       │           ├─▶ archivos (buscar, ordenar)
+                                       │           └─▶ pantalla (contexto)
+                                       │
+                                 Politica  ─── nada con efecto pasa sin permiso
+                                       │
+                            Acompañante (Qt/QML) ─▶ TTS local
 
 Uso:
-    python friday.py                # todo: voz + HUD
-    python friday.py --no-voice     # solo HUD y texto
-    python friday.py --no-hud       # solo consola
-    python friday.py --say "texto"  # una peticion y sale
-    python friday.py --check        # diagnostico
+    python friday.py                 acompañante + voz
+    python friday.py --no-voice      acompañante sin microfono
+    python friday.py --console       sin ventana, solo terminal
+    python friday.py --say "texto"   una peticion y sale
+    python friday.py --check         diagnostico
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
-import signal
 import sys
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -29,34 +35,26 @@ from core import privacy
 from core.bus import BUS
 from core.config import load as load_config
 from core.engine import build_engine
+from core.policy import Policy
 from core.router import Router
 from memory.graph import Graph
 from memory.vault import Vault
 from skills import build_skills
+from system import build_system_access
 
 BANNER = r"""
    ______ ____   ____ ____   ___ __   __
   / ____// __ \ /  _// __ \ /   |\ \ / /
  / /_   / /_/ / / / / / / // /| | \ V /
 / __/  / _, _/_/ / / /_/ // ___ |  | |
-/_/    /_/ |_|/___//_____//_/  |_|  |_|   O S
-        memoria en markdown · voz local · motor modular
+/_/    /_/ |_|/___//_____//_/  |_|  |_|
+        acompañante de escritorio · memoria en markdown · voz local
 """
-
-COMMANDS = [
-    {"key": "SPACE", "label": "hablar (manten)", "send": ""},
-    {"key": "metricas", "label": "jalar numeros", "send": "dame las metricas"},
-    {"key": "inbox", "label": "resumen matutino", "send": "dame el resumen del dia"},
-    {"key": "plan", "label": "escribir top 3", "send": "arma el plan de hoy"},
-    {"key": "agenda", "label": "que viene", "send": "que tengo en la agenda"},
-    {"key": "vault", "label": "buscar memoria", "send": "que sabes de "},
-    {"key": "repite", "label": "repetir ultima", "send": "repite"},
-    {"key": "heal", "label": "reparar grafo", "send": "reparar grafo"},
-    {"key": "silencio", "label": "callar voz", "send": "silencio"},
-]
 
 
 class Friday:
+    """El nucleo. No sabe que existe una interfaz; habla por el bus."""
+
     def __init__(self, args: argparse.Namespace):
         self.args = args
         self.cfg = load_config(args.config)
@@ -71,13 +69,15 @@ class Friday:
         )
         self.graph = Graph(self.vault, ttl_s=float(self.cfg.get("vault.index_ttl_s", 3)))
         self.engine = build_engine(self.cfg)
+        self.policy = Policy(self.cfg)
+        self.system = build_system_access(self.cfg, self.policy)
         self.skills = build_skills(self.cfg)
-        self.router = Router(self.cfg, self.vault, self.graph, self.engine, self.skills)
+        self.router = Router(self.cfg, self.vault, self.graph, self.engine,
+                             self.skills, system=self.system, policy=self.policy)
 
         self.stt = None
         self.tts = None
         self.ptt = None
-        self.hud = None
         self.status: dict[str, Any] = {
             "engine": self.engine.name, "engine_ok": False,
             "stt": "—", "stt_ok": False, "tts": "—", "tts_ok": False,
@@ -85,48 +85,13 @@ class Friday:
         }
         self._busy = asyncio.Lock()
         self._stop = asyncio.Event()
+        self.loop: asyncio.AbstractEventLoop | None = None
 
-    # ══════════════════════════════════════════ estado para el HUD
-    def snapshot(self) -> dict[str, Any]:
-        from skills.agenda import AgendaSkill
-        from skills.base import SkillContext
-
-        vitals = {}
-        if "metricas" in self.skills:
-            try:
-                vitals = self.skills["metricas"].system_vitals()
-            except Exception:
-                pass
-
-        agenda: list[dict] = []
-        if "agenda" in self.skills:
-            try:
-                ctx = SkillContext(self.cfg, self.vault, self.graph, self.engine)
-                now = datetime.now().timestamp()
-                agenda = [e for e in self.skills["agenda"].collect(ctx)
-                          if not e["done"] and e["ts"] > now - 86400][:10]
-            except Exception:
-                pass
-
-        return {
-            "status": self.status,
-            "vitals": vitals,
-            "vault": self.vault.stats(),
-            "graph": self.graph.build().to_json(max_nodes=80),
-            "agenda": agenda,
-            "skills": self.router.catalog(),
-            "commands": COMMANDS,
-            "audio": {"recording": bool(self.ptt and self.ptt.recording),
-                      "speaking": bool(self.tts and self.tts.speaking)},
-        }
-
-    # ══════════════════════════════════════════ ciclo principal
-    async def handle(self, text: str, source: str = "hud") -> None:
+    # ══════════════════════════════════════════ peticiones
+    async def handle(self, text: str, source: str = "ui") -> None:
         text = (text or "").strip()
         if not text:
             return
-        if self._busy.locked():
-            await self.bus.emit("core.info", message="ocupada, encolando…")
 
         async with self._busy:
             if self.cfg.get("privacy.log_transcripts", True) and source == "voz":
@@ -139,7 +104,6 @@ class Friday:
             await self.bus.emit("router.decided", skill=route.skill, how=route.how,
                                 confidence=route.confidence, text=text)
 
-            # comandos de voz sobre la propia voz
             if route.skill == "_mute" and self.tts:
                 self.tts.muted = True
                 self.tts.shutup()
@@ -149,18 +113,14 @@ class Friday:
                 self.tts.muted = False
                 await self.bus.emit("core.info", message="voz activa")
                 return
-            if route.skill == "_cancel":
-                if self.tts:
-                    self.tts.shutup()
-                await self.bus.emit("core.info", message="cancelado")
-                return
 
             _, res = await self.router.dispatch(text, route)
 
             await self.bus.emit(
                 "skill.result", skill=route.skill, speak=res.speak,
                 display=res.display, writes=res.writes, ok=res.ok,
-                error=res.error, ms=res.data.get("_ms", 0))
+                error=res.error, ms=res.data.get("_ms", 0),
+                pending=res.data.get("_pending", ""))
 
             if not res.ok and res.error:
                 await self.bus.emit("core.error", message=res.error[:300])
@@ -168,13 +128,14 @@ class Friday:
             if res.speak and self.tts:
                 await self.bus.emit("tts.speaking", backend=self.tts.backend)
                 self.tts.say(res.speak)
+                await self.bus.emit("tts.done")
 
-            if not self.hud:
+            if self.args.console or self.args.say:
                 print(f"\n\033[38;5;214m{res.display or res.speak}\033[0m\n")
 
     # ══════════════════════════════════════════ voz
     def _on_utterance(self, audio, duration: float) -> None:
-        """Corre en hilo del PTT. Sella la red mientras transcribe."""
+        """Corre en el hilo del PTT. Sella la red mientras transcribe."""
         try:
             with privacy.sealed():
                 result = self.stt.transcribe(audio)
@@ -188,7 +149,7 @@ class Friday:
         text = result.get("text", "").strip()
         self.bus.emit_threadsafe("voice.stt.final", text=text, duration=duration,
                                  **{k: v for k, v in result.items() if k != "text"})
-        if text:
+        if text and self.loop:
             asyncio.run_coroutine_threadsafe(self.handle(text, source="voz"), self.loop)
 
     async def _start_voice(self) -> None:
@@ -196,24 +157,18 @@ class Friday:
         from voice.stt import LocalSTT
         from voice.tts import LocalTTS
 
-        # --- TTS (rapido) ---
         self.tts = LocalTTS(self.cfg)
         await asyncio.to_thread(self.tts.load)
         self.tts.start()
-        self.status["tts"] = f"{self.tts.backend}"
+        self.status["tts"] = self.tts.backend
         self.status["tts_ok"] = self.tts.backend != "none"
-        await self.bus.emit("core.info",
-                            message=f"tts: {self.tts.backend} ({self.tts.info})")
+        await self.bus.emit("core.info", message=f"voz: {self.tts.backend} ({self.tts.info})")
 
-        # --- STT (lento: modelo) ---
         self.stt = LocalSTT(self.cfg)
-        self.status["stt"] = f"cargando {self.stt.model_name}…"
-
         allow_dl = self.args.allow_model_download
 
         def _load_stt() -> None:
-            # El sello es por hilo: hay que ponerlo AQUI, dentro del worker,
-            # no alrededor de to_thread. Si no, no protege nada.
+            # el sello es por hilo: va DENTRO del worker o no protege nada
             if allow_dl:
                 self.stt.load()
             else:
@@ -227,85 +182,58 @@ class Friday:
         except privacy.AudioLeak:
             self.status["stt"] = "modelo no descargado"
             await self.bus.emit("core.error", message=(
-                "El modelo de Whisper no esta en cache y hace falta descargarlo una vez. "
+                "Falta descargar el modelo de voz una vez. "
                 "Corre: python friday.py --allow-model-download"))
         except Exception as exc:
             self.status["stt"] = "error"
             await self.bus.emit("core.error", message=f"STT no cargo: {exc}")
-        await self.bus.emit("core.info", message=f"stt: {self.status['stt']}")
 
-        # --- PTT ---
         if self.status["stt_ok"]:
+            await self.bus.emit("core.info", message=f"oidos: {self.status['stt']}")
             self.ptt = PushToTalk(self.cfg, self.bus)
             self.ptt.on_utterance = self._on_utterance
             await asyncio.to_thread(self.ptt.start)
             await self.bus.emit("core.info",
-                                message=f"push-to-talk armado: {self.ptt.key_name} ({self.ptt.mode})")
+                                message=f"manten {self.ptt.key_name.upper()} y habla")
 
     # ══════════════════════════════════════════ latido
     async def _tick(self) -> None:
-        interval = max(0.5, float(self.cfg.get("hud.refresh_ms", 1000)) / 1000)
+        interval = max(0.05, float(self.cfg.get("desktop.level_ms", 60)) / 1000)
         while not self._stop.is_set():
-            try:
-                if self.ptt and self.ptt.recording:
-                    await self.bus.emit("voice.level", level=self.ptt.level)
-                elif self.hud and self.hud.clients:
-                    await self.bus.emit("core.tick")
-            except Exception:
-                pass
+            if self.ptt and self.ptt.recording:
+                await self.bus.emit("voice.level", level=self.ptt.level)
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=interval)
             except asyncio.TimeoutError:
                 pass
 
     # ══════════════════════════════════════════ arranque
-    async def run(self) -> None:
-        self.loop = asyncio.get_running_loop()
+    async def start(self, loop: asyncio.AbstractEventLoop | None = None) -> None:
+        self.loop = loop or asyncio.get_running_loop()
         self.bus.bind_loop(self.loop)
 
         if self.cfg.get("privacy.local_only_audio", True):
-            privacy.install(reporter=lambda m: self.bus.emit_threadsafe("core.error", message=m))
+            privacy.install(
+                reporter=lambda m: self.bus.emit_threadsafe("core.error", message=m))
 
-        print(BANNER)
-        print(f"  vault  : {self.vault.root}")
-        print(f"  motor  : {self.engine.name}")
-
-        ok, info = await self.engine.health()
+        ok, _info = await self.engine.health()
         self.status["engine_ok"] = ok
-        self.status["engine"] = f"{self.engine.name}" + ("" if ok else " ✗")
-        print(f"  estado : {'ok' if ok else 'CAIDO'} — {info}\n")
+        await self.bus.emit("core.info",
+                            message=f"motor {self.engine.name}: {'listo' if ok else 'caido'}")
+
+        activas = [k for k, v in self.system.available().items() if v]
+        await self.bus.emit("core.info",
+                            message=f"acceso al sistema: {', '.join(activas) or 'ninguno'}")
 
         self._seed_vault()
 
-        if self.cfg.get("hud.enabled", True) and not self.args.no_hud:
-            from hud.server import HUDServer
-            self.hud = HUDServer(self.cfg, self.bus, self.snapshot,
-                                 lambda t: self.handle(t, source="hud"))
-            url = await self.hud.start()
-            print(f"  HUD    : {url}\n")
-
         if self.cfg.get("voice.enabled", True) and not self.args.no_voice:
             await self._start_voice()
-        else:
-            print("  voz    : deshabilitada\n")
-
-        if self.args.say:
-            await self.handle(self.args.say, source="cli")
-            await asyncio.sleep(1.0)
-            return
 
         asyncio.create_task(self._tick())
         await self.bus.emit("core.info", message="F.R.I.D.A.Y en linea.")
 
-        if self.ptt:
-            print(f"  Manten {self.ptt.key_name.upper()} y habla. Ctrl+C para salir.\n")
-        else:
-            print("  Escribe en el HUD. Ctrl+C para salir.\n")
-
-        await self._stop.wait()
-
     def _seed_vault(self) -> None:
-        """Primera vez: deja el vault utilizable, no vacio."""
         readme = self.vault.root / "README.md"
         if readme.exists():
             return
@@ -331,8 +259,56 @@ class Friday:
         if self.tts:
             self.tts.shutup()
             self.tts.stop()
-        if self.hud:
-            await self.hud.stop()
+
+
+# ══════════════════════════════════════════════ modos de arranque
+def run_companion(fri: Friday) -> int:
+    """Modo normal: ventana flotante. Qt manda en el hilo principal."""
+    from desktop import CompanionApp
+
+    app = CompanionApp(fri.cfg, fri.bus, lambda t: fri.handle(t, source="ui"))
+
+    async def core_main(loop: asyncio.AbstractEventLoop) -> None:
+        try:
+            await fri.start(loop)
+        except Exception as exc:
+            await fri.bus.emit("core.error", message=f"arranque fallido: {exc}")
+
+    print(BANNER)
+    print(f"  vault  : {fri.vault.root}")
+    print(f"  motor  : {fri.engine.name}")
+    print(f"  sistema: {', '.join(k for k, v in fri.system.available().items() if v)}")
+    print("\n  El acompañante esta en tu escritorio. Cierra desde la bandeja.\n")
+
+    code = app.run(core_main)
+    asyncio.run(fri.shutdown())
+    return code
+
+
+async def run_console(fri: Friday) -> int:
+    """Sin ventana: util para depurar y para equipos sin escritorio."""
+    print(BANNER)
+    await fri.start()
+
+    if fri.args.say:
+        await fri.handle(fri.args.say, source="cli")
+        await asyncio.sleep(0.4)
+        await fri.shutdown()
+        return 0
+
+    print("  Modo consola. Escribe, o Ctrl+C para salir.\n")
+    loop = asyncio.get_running_loop()
+    try:
+        while True:
+            line = await loop.run_in_executor(None, lambda: input("› "))
+            if line.strip().lower() in ("salir", "exit", "quit"):
+                break
+            await fri.handle(line, source="consola")
+    except (EOFError, KeyboardInterrupt):
+        pass
+    finally:
+        await fri.shutdown()
+    return 0
 
 
 # ══════════════════════════════════════════════ diagnostico
@@ -340,23 +316,25 @@ async def check(cfg_path: str | None) -> int:
     cfg = load_config(cfg_path)
     print(BANNER)
     print("  DIAGNOSTICO\n")
-    # (etiqueta, ok, nota, obligatorio)
     rows: list[tuple[str, bool, str, bool]] = []
 
     eng = build_engine(cfg)
     ok, info = await eng.health()
     rows.append((f"motor · {eng.name}", ok, info, True))
 
-    for mod, label in [("numpy", "numpy"), ("sounddevice", "audio i/o"),
-                       ("pynput", "push-to-talk"), ("faster_whisper", "STT local"),
-                       ("aiohttp", "HUD"), ("psutil", "vitales")]:
+    for mod, label, req in [
+        ("numpy", "numpy", True), ("psutil", "vitales", True),
+        ("PySide6", "acompañante (Qt)", True),
+        ("sounddevice", "audio i/o", False), ("pynput", "push-to-talk", False),
+        ("faster_whisper", "STT local", False),
+        ("win32gui", "ventanas (pywin32)", False),
+    ]:
         try:
             __import__(mod)
-            rows.append((label, True, mod, True))
+            rows.append((label, True, mod, req))
         except ImportError:
-            rows.append((label, False, f"falta: pip install {mod}", True))
+            rows.append((label, False, f"pip install {mod}", req))
 
-    # TTS: basta con UNO de los dos. Ambos son locales.
     try:
         import pyttsx3  # noqa: F401
         sapi = True
@@ -367,25 +345,21 @@ async def check(cfg_path: str | None) -> int:
         piper = True
     except ImportError:
         piper = False
-    rows.append(("TTS SAPI5", sapi, "pyttsx3 (voces de Windows)", False))
-    rows.append(("TTS piper", piper, "opcional: pip install piper-tts", False))
-    rows.append(("TTS (alguno)", sapi or piper,
-                 "piper" if piper else "sapi5" if sapi else "sin boca", True))
+    rows.append(("TTS local", sapi or piper,
+                 "piper" if piper else "sapi5" if sapi else "sin boca", False))
+
+    policy = Policy(cfg)
+    access = build_system_access(cfg, policy)
+    for cap, on in access.available().items():
+        rows.append((f"acceso · {cap}", on,
+                     "disponible" if on else "no en esta plataforma", False))
 
     v = Vault(cfg.vault_root)
     st = v.stats()
-    rows.append(("vault", True, f"{st['notes']} notas · {st['links']} enlaces · {v.root}", True))
-
-    try:
-        import sounddevice as sd
-        din = sd.query_devices(kind="input")
-        name = str(din.get("name", "?"))
-        virtual = any(k in name.lower() for k in ("voicemod", "cable", "virtual", "vb-audio"))
-        rows.append(("microfono", True,
-                     name[:46] + ("  ← virtual, revisa que capte tu voz" if virtual else ""),
-                     True))
-    except Exception as exc:
-        rows.append(("microfono", False, str(exc)[:52], True))
+    rows.append(("vault", True, f"{st['notes']} notas · {st['links']} enlaces", True))
+    rows.append(("politica", True,
+                 f"escribe en {len(policy.write_roots)} raices · "
+                 f"confirma sobre {policy.confirm_over} archivos", True))
 
     width = max(len(r[0]) for r in rows) + 2
     for name, good, note, req in rows:
@@ -400,14 +374,14 @@ async def check(cfg_path: str | None) -> int:
 
 # ══════════════════════════════════════════════ entrada
 def main() -> int:
-    ap = argparse.ArgumentParser(prog="friday", description="F.R.I.D.A.Y OS")
+    ap = argparse.ArgumentParser(prog="friday", description="F.R.I.D.A.Y")
     ap.add_argument("--config", default=None, help="ruta a friday.toml")
     ap.add_argument("--no-voice", action="store_true", help="sin STT/TTS/PTT")
-    ap.add_argument("--no-hud", action="store_true", help="sin interfaz")
+    ap.add_argument("--console", action="store_true", help="sin ventana, solo terminal")
     ap.add_argument("--say", metavar="TEXTO", help="una peticion y sale")
-    ap.add_argument("--check", action="store_true", help="diagnostico de dependencias")
+    ap.add_argument("--check", action="store_true", help="diagnostico")
     ap.add_argument("--allow-model-download", action="store_true",
-                    help="permite bajar el modelo de Whisper la primera vez")
+                    help="permite bajar el modelo de voz la primera vez")
     args = ap.parse_args()
 
     if args.check:
@@ -415,23 +389,14 @@ def main() -> int:
 
     fri = Friday(args)
 
-    async def go() -> None:
-        loop = asyncio.get_running_loop()
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            try:
-                loop.add_signal_handler(sig, lambda: fri._stop.set())
-            except NotImplementedError:
-                pass          # Windows: KeyboardInterrupt se encarga
+    if args.console or args.say:
         try:
-            await fri.run()
-        finally:
-            await fri.shutdown()
+            return asyncio.run(run_console(fri))
+        except KeyboardInterrupt:
+            print("\n  F.R.I.D.A.Y fuera de linea.\n")
+            return 0
 
-    try:
-        asyncio.run(go())
-    except KeyboardInterrupt:
-        print("\n  FRIDAY fuera de linea.\n")
-    return 0
+    return run_companion(fri)
 
 
 if __name__ == "__main__":
