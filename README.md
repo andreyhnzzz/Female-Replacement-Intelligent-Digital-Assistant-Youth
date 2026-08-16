@@ -1,4 +1,22 @@
-# F.R.I.D.A.Y
+<div align="center">
+
+# 🟠 F.R.I.D.A.Y
+
+**F**emale **R**eplacement **I**ntelligent **D**igital **A**ssistant **Y**outh
+
+### Tu copiloto de escritorio — no un chatbot con altavoz
+
+<p>
+  <img src="https://img.shields.io/badge/Python-3.12-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.12">
+  <img src="https://img.shields.io/badge/Qt6-PySide6-41CD52?style=for-the-badge&logo=qt&logoColor=white" alt="Qt6 / PySide6">
+  <img src="https://img.shields.io/badge/Windows-11-0078D6?style=for-the-badge&logo=windows11&logoColor=white" alt="Windows 11">
+  <img src="https://img.shields.io/badge/Motor-Claude-CC785C?style=for-the-badge&logo=anthropic&logoColor=white" alt="Claude">
+  <img src="https://img.shields.io/badge/Voz-100%25_local-2EA043?style=for-the-badge&logo=shieldsdotio&logoColor=white" alt="Voz 100% local">
+</p>
+
+</div>
+
+---
 
 Copiloto de escritorio con voz local, memoria en markdown enlazado y acceso
 real a la computadora. **No es una aplicación web.** Es una ventana del sistema
@@ -19,9 +37,24 @@ tu voz ─▶ F9 ─▶ STT local ─▶ Router ─▶ Skill ─┬─▶ vault/
                          Acompañante (QtQuick3D) ─▶ TTS local
 ```
 
+### ✨ Por qué existe
+
+La mayoría de "asistentes de IA" son un chat con micrófono. FRIDAY es otra
+cosa: vive en tu escritorio, actúa sobre tu sistema de verdad, y todo lo que
+oye se queda en tu equipo.
+
+|  |  |
+|---|---|
+| 🎙️ **Voz de punta a punta, sin nube** | STT y TTS corren en tu CPU. Un candado a nivel de socket revienta cualquier conexión no-loopback mientras escucha. |
+| 🖥️ **Manos reales sobre Windows** | Abre programas, cambia de ventana, organiza carpetas, lee tu pantalla — con una política de permisos delante de cada acción con efecto. |
+| 🔀 **Cambia de cerebro hablando** | *"Cambia a Sonnet"* conmuta el modelo en caliente. Claude, un endpoint local, o cualquier proveedor compatible con OpenAI. |
+| 🌐 **Sale al mundo, con cuidado** | Lee noticias por RSS y responde con lo que investigó — nunca raspa un buscador ni finge ser otro. |
+| 🗂️ **Memoria que no depende de FRIDAY** | Todo es markdown plano en tu disco. Bórrala mañana y tus notas siguen ahí, legibles con cualquier editor. |
+| 💠 **Un HUD que reacciona, no decora** | Holograma 3D real cuyos nodos hierven al pensar y respiran con tu voz al escuchar. |
+
 ---
 
-## Arranque
+## 🚀 Arranque
 
 ```powershell
 .\scripts\setup.ps1              # venv + dependencias + modelo de voz (una vez)
@@ -43,7 +76,7 @@ icono queda en la bandeja del sistema.
 
 ---
 
-## Quién es
+## 🎭 Quién es
 
 No es un mayordomo. Es una **copiloto**: alta empatía situacional, eficiencia
 ejecutiva y lealtad jerárquica. Te llama **Jefe**, habla con modismos casuales
@@ -60,7 +93,7 @@ cambia quién es, sin tocar código.
 
 ---
 
-## El acompañante
+## 💠 El acompañante
 
 Un **holograma 3D de verdad**, no un círculo con anillos. Escena `View3D` con
 cámara en perspectiva: los meridianos del fondo pasan por detrás del núcleo,
@@ -91,11 +124,11 @@ Arrástralo desde el núcleo. Clic derecho para el menú, doble clic para escrib
 
 ---
 
-## Las 11 skills
+## 🧠 Las 11 skills
 
 FRIDAY enruta sola. No hay que invocarlas por nombre.
 
-### Sobre la computadora
+### 🖥️ Sobre la computadora
 
 | Skill | Ejemplos |
 |---|---|
@@ -103,14 +136,14 @@ FRIDAY enruta sola. No hay que invocarlas por nombre.
 | **archivos** | *"organiza mis descargas"* · *"busca el archivo presupuesto"* · *"renombra …"* |
 | **pantalla** | *"qué estoy viendo"* · *"explícame esto"* |
 
-### Sobre el mundo
+### 🌐 Sobre el mundo
 
 | Skill | Ejemplos |
 |---|---|
 | **noticias** | *"ponme al día con las noticias"* · *"dame los titulares de tecnología"* |
 | **web** | *"investiga quién fue Ada Lovelace"* · *"resume esta página https://…"* |
 
-### Sobre tu memoria
+### 🗂️ Sobre tu memoria
 
 | Skill | Ejemplos |
 |---|---|
@@ -120,7 +153,7 @@ FRIDAY enruta sola. No hay que invocarlas por nombre.
 | **inbox** | *"buenos días"* · *"ponme al día"* |
 | **metricas** | *"dame las métricas"* |
 
-### Sobre sí misma
+### 🔀 Sobre sí misma
 
 | Skill | Ejemplos |
 |---|---|
@@ -136,7 +169,7 @@ Chrome`** es una ventana. Lo que decide no es el verbo, es el objeto.
 
 ---
 
-## Cambiar de modelo hablando
+## 🔀 Cambiar de modelo hablando
 
 El motor no es un ajuste de arranque: es un conmutador. Di el nombre y cambia
 en caliente, sin reiniciar nada.
@@ -177,7 +210,7 @@ el roster. Nada fuera de `core/engine.py` sabe que Claude existe.
 
 ---
 
-## La política: por qué es seguro
+## 🛡️ La política: por qué es seguro
 
 El STT se equivoca. *"Organiza mis descargas"* mal reconocido no puede
 convertirse en un desastre. Por eso **toda acción con efecto pasa por un
@@ -222,7 +255,7 @@ Nada se sobrescribe nunca: si el destino existe, se añade un sufijo.
 
 ---
 
-## Noticias e investigación
+## 📰 Noticias e investigación
 
 **Noticias.** Lee los feeds RSS que declares, los deduplica, los intercala para
 que ningún medio copie el briefing, dice dos frases y deja el resumen completo
@@ -252,7 +285,7 @@ búsqueda, *"busca X en google"* te los abre en tu navegador.
 
 ---
 
-## La memoria: solo archivos
+## 🗂️ La memoria: solo archivos
 
 Sin base de datos. Sin índice que se corrompa. Si borras FRIDAY, tus notas
 siguen ahí y las abre cualquier editor de texto.
@@ -272,7 +305,7 @@ sola.
 
 ---
 
-## Voz: por qué es privada de verdad
+## 🎙️ Voz: por qué es privada de verdad
 
 - **STT** — `faster-whisper` en tu CPU/GPU. El modelo se baja **una vez**; de ahí, offline.
 - **TTS** — Piper (ONNX local) o las voces SAPI5 de Windows.
@@ -301,7 +334,7 @@ Primera vez, para permitir la descarga del modelo:
 
 ---
 
-## Arquitectura
+## 🏗️ Arquitectura
 
 Bajo acoplamiento por construcción, no por disciplina.
 
@@ -349,9 +382,37 @@ conversación no deja ninguna referencia colgando.
 
 `ctx` trae `vault`, `graph`, `engine`, `system`, `policy` y `text`. Nada global.
 
+### 🧰 Stack tecnológico
+
+<p>
+  <img src="https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python">
+  <img src="https://img.shields.io/badge/asyncio-event_loop-3776AB?style=flat-square&logo=python&logoColor=white" alt="asyncio">
+  <img src="https://img.shields.io/badge/PySide6-Qt6-41CD52?style=flat-square&logo=qt&logoColor=white" alt="PySide6">
+  <img src="https://img.shields.io/badge/QtQuick3D-View3D-41CD52?style=flat-square&logo=qt&logoColor=white" alt="QtQuick3D">
+  <img src="https://img.shields.io/badge/QML-UI_declarativa-41CD52?style=flat-square&logo=qt&logoColor=white" alt="QML">
+  <img src="https://img.shields.io/badge/pywin32-Windows_API-0078D6?style=flat-square&logo=windows11&logoColor=white" alt="pywin32">
+  <br>
+  <img src="https://img.shields.io/badge/Claude-Anthropic-CC785C?style=flat-square&logo=anthropic&logoColor=white" alt="Claude">
+  <img src="https://img.shields.io/badge/Ollama-modelos_locales-000000?style=flat-square&logo=ollama&logoColor=white" alt="Ollama">
+  <img src="https://img.shields.io/badge/OpenAI_compat-llama.cpp_·_vLLM_·_LM_Studio-412991?style=flat-square&logo=openai&logoColor=white" alt="OpenAI compatible">
+  <br>
+  <img src="https://img.shields.io/badge/faster--whisper-STT_local-9146FF?style=flat-square" alt="faster-whisper">
+  <img src="https://img.shields.io/badge/Piper-TTS_neuronal-FFB300?style=flat-square" alt="Piper TTS">
+  <img src="https://img.shields.io/badge/SAPI5-TTS_de_Windows-0078D6?style=flat-square&logo=windows11&logoColor=white" alt="SAPI5">
+  <img src="https://img.shields.io/badge/pynput-push--to--talk-FFB300?style=flat-square" alt="pynput">
+  <br>
+  <img src="https://img.shields.io/badge/aiohttp-cliente_HTTP-2C5BB4?style=flat-square&logo=aiohttp&logoColor=white" alt="aiohttp">
+  <img src="https://img.shields.io/badge/RSS_%2F_Atom-noticias-FFA500?style=flat-square&logo=rss&logoColor=white" alt="RSS/Atom">
+  <img src="https://img.shields.io/badge/Wikipedia_API-investigación-000000?style=flat-square&logo=wikipedia&logoColor=white" alt="Wikipedia API">
+  <br>
+  <img src="https://img.shields.io/badge/TOML-configuración-9C4221?style=flat-square&logo=toml&logoColor=white" alt="TOML">
+  <img src="https://img.shields.io/badge/Markdown-memoria_%28vault%29-000000?style=flat-square&logo=markdown&logoColor=white" alt="Markdown">
+  <img src="https://img.shields.io/badge/Obsidian-grafo_de_notas-7C3AED?style=flat-square&logo=obsidian&logoColor=white" alt="Obsidian">
+</p>
+
 ---
 
-## Pruebas
+## 🧪 Pruebas
 
 ```powershell
 .\.venv\Scripts\python scripts\smoke_test.py     # 46 · memoria, skills, enrutado, privacidad
@@ -370,7 +431,7 @@ El HUD se revisa mirándolo, no leyéndolo:
 
 ---
 
-## Problemas comunes
+## 🩹 Problemas comunes
 
 | Síntoma | Causa |
 |---|---|
@@ -385,3 +446,11 @@ El HUD se revisa mirándolo, no leyéndolo:
 | Las noticias no llegan | Revisa `[policy] allow_web_fetch` y `[system] contact`. El panel dice qué feed falló. |
 | "Investiga" no encuentra nada | Sin contacto en el User-Agent la fuente responde 403. Pon `[system] contact`. |
 | El panel se ve translúcido de más | Activa `[desktop] backdrop = "acrylic"` para desenfoque real de Windows 11. |
+
+---
+
+<div align="center">
+
+**F.R.I.D.A.Y no vive en un servidor de otro. Vive en tu escritorio.**
+
+</div>
