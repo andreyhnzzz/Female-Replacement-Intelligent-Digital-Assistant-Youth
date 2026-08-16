@@ -71,6 +71,15 @@ def _wire_windows(cfg: Any, policy: Policy, access: SystemAccess) -> None:
     except ImportError:
         reader = None
 
+    try:
+        from system.win32.desktop import (WindowsClipboard, WindowsMediaControl,
+                                          WindowsSessionControl)
+        access.media = WindowsMediaControl(policy)
+        access.session = WindowsSessionControl(policy)
+        access.clipboard = WindowsClipboard(policy)
+    except ImportError:
+        pass
+
     if reader is not None:
         try:
             from system.win32.screen import WindowsScreenReader

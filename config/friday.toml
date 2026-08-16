@@ -195,6 +195,13 @@ allow_file_write   = true     # mover, renombrar, organizar
 allow_shell        = false    # ejecutar comandos crudos: apagado por defecto
 allow_web          = true     # abrir busquedas en TU navegador
 allow_web_fetch    = true     # que FRIDAY salga a la red por su cuenta
+
+# Control directo del escritorio. Separados porque el riesgo no se
+# parece: el volumen se deshace solo, el bloqueo te deja fuera, y el
+# portapapeles suele tener lo ultimo que copiaste — a veces una clave.
+allow_media        = true     # volumen y reproduccion
+allow_clipboard    = true     # leer y escribir el portapapeles
+allow_session      = false    # bloquear/suspender: apagado por defecto
 confirm_over_files = 5        # sobre este numero, pide confirmacion hablada
 
 # Donde PUEDE escribir. Fuera de aqui, no.
@@ -251,7 +258,7 @@ volume    = 0.9
 # ----------------------------------------------------------
 [skills]
 enabled = ["metricas", "inbox", "plan", "vault", "agenda",
-           "sistema", "archivos", "pantalla",
+           "sistema", "archivos", "pantalla", "ordenador",
            "noticias", "web", "motor"]
 
 [skills.metricas]
@@ -286,6 +293,10 @@ rename_pattern = "{date} — {name}"
 
 [skills.pantalla]
 log_reads = true             # cada lectura de pantalla queda anotada
+
+[skills.ordenador]
+# La accion concreta la elige el motor contra el catalogo declarado en
+# skills/ordenador.py; aqui no hay nada que guionizar.
 
 [skills.noticias]
 max_items = 12

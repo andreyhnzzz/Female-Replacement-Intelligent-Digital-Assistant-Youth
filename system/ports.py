@@ -242,6 +242,45 @@ class FileOrganizer(Protocol):
 
 
 @runtime_checkable
+class MediaControl(Protocol):
+    """Volumen y reproduccion. Efecto inmediato y trivialmente reversible.
+
+    Va separado de `SessionControl` por riesgo, no por comodidad: bajar el
+    volumen se deshace subiendolo, bloquear la sesion no se deshace desde
+    aqui. Que la politica pueda conceder uno sin el otro es el punto.
+    """
+
+    def volume(self, delta: int) -> int: ...
+    def set_volume(self, level: int) -> int: ...
+    def mute(self) -> bool: ...
+    def playback(self, action: str) -> bool: ...     # play_pause | next | prev | stop
+
+
+@runtime_checkable
+class SessionControl(Protocol):
+    """Bloquear o suspender la sesion. Te deja fuera de la maquina.
+
+    No incluye apagar ni reiniciar a proposito: una orden dictada por voz y
+    mal transcrita no puede costarte el trabajo sin guardar.
+    """
+
+    def lock(self) -> bool: ...
+    def sleep(self) -> bool: ...
+
+
+@runtime_checkable
+class Clipboard(Protocol):
+    """Leer y escribir el portapapeles.
+
+    Leer es sensible aunque parezca inofensivo: ahi es donde la gente pega
+    contraseñas. Por eso pasa por politica igual que escribir.
+    """
+
+    def read(self) -> str: ...
+    def write(self, text: str) -> bool: ...
+
+
+@runtime_checkable
 class WebOpener(Protocol):
     """Abre busquedas, sitios y URLs en el navegador del usuario.
 
@@ -273,6 +312,9 @@ class SystemAccess:
     web: WebOpener | None = None
     news: NewsPort | None = None
     pages: PageReaderPort | None = None
+    media: MediaControl | None = None
+    session: SessionControl | None = None
+    clipboard: Clipboard | None = None
 
     def available(self) -> dict[str, bool]:
         return {f: getattr(self, f) is not None for f in self.__slots__}

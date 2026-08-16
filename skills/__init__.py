@@ -10,6 +10,7 @@ from .inbox import InboxSkill
 from .metricas import MetricasSkill
 from .motor import MotorSkill
 from .noticias import NoticiasSkill
+from .ordenador import OrdenadorSkill
 from .pantalla import PantallaSkill
 from .plan import PlanSkill
 from .sistema import SistemaSkill
@@ -30,6 +31,7 @@ ALL_SKILLS: dict[str, type[Skill]] = {
     "sistema": SistemaSkill,
     "archivos": ArchivosSkill,
     "pantalla": PantallaSkill,
+    "ordenador": OrdenadorSkill,
     # el mundo de fuera
     "noticias": NoticiasSkill,
     "web": WebSkill,

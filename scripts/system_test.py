@@ -366,6 +366,103 @@ async def main() -> int:
           == "Titulo dato con alias y code",
           LocalTTS.clean("## Titulo\n- **dato** con [[Nota|alias]] y `code`"))
 
+    # ══════════════════ CONTROL DEL ORDENADOR ══════════════════
+    # La accion la elige el motor, no una regex. Eso significa que el motor
+    # puede equivocarse o alucinar, asi que lo que se prueba aqui es el
+    # guardia: que el catalogo sea lista blanca y que la politica mande.
+    print("\n  ── control del ordenador ──")
+    from skills.ordenador import CATALOGO, OrdenadorSkill
+
+    class Espia:
+        """Puertos falsos: apuntan lo que se les pide, no tocan la maquina."""
+        def __init__(self): self.log = []
+        def volume(self, d): self.log.append(("volume", d)); return d
+        def set_volume(self, l): self.log.append(("set_volume", l)); return l
+        def mute(self): self.log.append(("mute",)); return True
+        def playback(self, a): self.log.append(("playback", a)); return True
+        def read(self): self.log.append(("read",)); return "copiado"
+        def write(self, t): self.log.append(("write", t)); return True
+        def lock(self): self.log.append(("lock",)); return True
+        def sleep(self): self.log.append(("sleep",)); return True
+
+    class MotorFijo(Engine):
+        """Devuelve una propuesta fija, como si fuera lo que dijo el modelo."""
+        name = "fijo"
+        def __init__(self, cfg, payload): super().__init__(cfg); self.payload = payload
+        async def complete(self, prompt, system="", **kw): return self.payload
+
+    class CfgSesion:
+        """La config real, pero con el control de sesion permitido."""
+        def __init__(self, base, **over): self._b, self._o, self.root = base, over, base.root
+        def get(self, k, d=None):
+            return self._o[k] if k in self._o else self._b.get(k, d)
+        def persona(self): return self._b.persona()
+
+    orden = OrdenadorSkill(real_cfg0)
+
+    async def pedir(payload, acceso, politica):
+        motor = MotorFijo(real_cfg0, payload)
+        ctx = SkillContext(real_cfg0, None, None, motor, text="lo que sea",
+                           system=acceso, policy=politica)
+        return await orden.run(ctx)
+
+    espia = Espia()
+    libre = SystemAccess(media=espia, clipboard=espia, session=espia)
+    pol_libre = Policy(CfgSesion(real_cfg0, **{"policy.allow_session": True}))
+
+    espia.log.clear()
+    res_o = await pedir('{"accion":"volumen_cambiar","args":{"cuanto":25},'
+                        '"confianza":0.9,"porque":"subir"}', libre, pol_libre)
+    check("ejecuta la accion que eligio el motor",
+          espia.log == [("volume", 25)], str(espia.log))
+
+    # El catalogo es lista blanca: si el modelo inventa, no hay nada que llamar.
+    espia.log.clear()
+    res_o = await pedir('{"accion":"formatear_disco","args":{},'
+                        '"confianza":0.99,"porque":"alucinacion"}', libre, pol_libre)
+    check("una accion inventada por el motor no existe",
+          espia.log == [] and not res_o.pending,
+          "el catalogo es la lista blanca, diga lo que diga el modelo")
+
+    espia.log.clear()
+    res_o = await pedir('{"accion":"silenciar","args":{},'
+                        '"confianza":0.2,"porque":"dudoso"}', libre, pol_libre)
+    check("poca confianza no toca nada", espia.log == [], str(espia.log))
+
+    # Sesion permitida -> se confirma, no se ejecuta todavia.
+    espia.log.clear()
+    res_o = await pedir('{"accion":"bloquear","args":{},'
+                        '"confianza":0.95,"porque":"se va"}', libre, pol_libre)
+    check("bloquear espera un «si» explicito",
+          res_o.pending is not None and espia.log == [],
+          f"pendiente={bool(res_o.pending)}, ejecutado={espia.log}")
+    if res_o.pending:
+        res_o.pending.run()
+        check("y se aplica solo tras confirmar", espia.log == [("lock",)], str(espia.log))
+
+    # Sesion denegada -> ni se pregunta.
+    espia.log.clear()
+    pol_estricta = Policy(CfgSesion(real_cfg0, **{"policy.allow_session": False}))
+    res_o = await pedir('{"accion":"bloquear","args":{},'
+                        '"confianza":0.95,"porque":"se va"}', libre, pol_estricta)
+    check("sin permiso no se ejecuta y se dice por que",
+          not res_o.ok and espia.log == [] and "session" in res_o.error,
+          res_o.speak[:60])
+
+    # Un puerto ausente saca la accion del catalogo que ve el motor.
+    espia.log.clear()
+    res_o = await pedir('{"accion":"volumen_cambiar","args":{"cuanto":10},'
+                        '"confianza":0.9,"porque":"x"}',
+                        SystemAccess(clipboard=espia), pol_libre)
+    check("una capacidad sin puerto no se ofrece", espia.log == [], str(espia.log))
+
+    check("toda accion del catalogo tiene implementacion",
+          all(a.nombre in {
+              "volumen_cambiar", "volumen_fijar", "silenciar", "reproduccion",
+              "copiar", "leer_portapapeles", "bloquear", "suspender", "minimizar"
+          } for a in CATALOGO),
+          f"{len(CATALOGO)} acciones declaradas")
+
     # ══════════════════ SKILLS Y CONFIRMACION ══════════════════
     print("\n  ── skills de sistema ──")
     real_cfg = load_config(ROOT / "config" / "friday.toml")

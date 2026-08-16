@@ -68,6 +68,11 @@ class Policy:
         self.confirm_over = int(cfg.get(f"{p}.confirm_over_files", 5))
         self.blocked_apps = [a.lower() for a in cfg.get(f"{p}.blocked_apps", [])]
         self.blocked_hosts = [h.lower() for h in cfg.get(f"{p}.blocked_hosts", [])]
+        self.control = {
+            "media": bool(cfg.get(f"{p}.allow_media", True)),
+            "session": bool(cfg.get(f"{p}.allow_session", False)),
+            "clipboard": bool(cfg.get(f"{p}.allow_clipboard", True)),
+        }
 
         root = Path(cfg.root) if hasattr(cfg, "root") else Path.cwd()
         self.write_roots = self._resolve_roots(
@@ -186,6 +191,33 @@ class Policy:
                             "policy.allow_web")
         return Decision(Verdict.ALLOW)
 
+    def can_control(self, kind: str) -> Decision:
+        """Control directo del escritorio: `media`, `session` o `clipboard`.
+
+        Cada uno tiene su interruptor porque el riesgo no se parece en nada:
+        bajar el volumen se deshace subiendolo; bloquear la sesion te deja
+        fuera; leer el portapapeles ve lo ultimo que copiaste, que a menudo
+        es una contraseña. Un solo `allow_control` los trataria igual, y
+        entonces habilitar lo util obligaria a habilitar lo delicado.
+        """
+        if not self.enabled:
+            return Decision(Verdict.ALLOW, "politica desactivada")
+
+        kind = (kind or "").strip().lower()
+        permitido = self.control.get(kind)
+        if permitido is None:
+            return Decision(Verdict.DENY, f"control desconocido: «{kind}»", "hard-deny")
+        if not permitido:
+            return Decision(Verdict.DENY,
+                            f"el control de {kind} esta deshabilitado",
+                            f"policy.allow_{kind}")
+
+        # La sesion se confirma siempre, aunque este permitida: «bloquea» mal
+        # transcrito no puede echarte de la maquina sin que lo digas dos veces.
+        if kind == "session":
+            return Decision(Verdict.CONFIRM, "bloquear o suspender se confirma", "session")
+        return Decision(Verdict.ALLOW)
+
     def can_fetch(self, url: str) -> Decision:
         """Descargar una pagina para leerla. Distinto de abrirla.
 
@@ -231,6 +263,7 @@ class Policy:
             "shell": self.allow_shell,
             "web": self.allow_web,
             "web_fetch": self.allow_web_fetch,
+            "control": dict(self.control),
             "confirm_over": self.confirm_over,
             "write_roots": [str(r) for r in self.write_roots],
         }
