@@ -23,8 +23,20 @@ from core.bus import Bus
 
 from . import backdrop
 from .bridge import FridayBridge
+from .sprites import PROVIDER_ID, SpriteProvider
 
 QML_DIR = Path(__file__).parent / "qml"
+
+# Importar el modulo registra los tipos QML: el decorador @QmlElement no
+# corre si nadie carga el archivo. Sin esto, `import Friday.Geometry` falla
+# en el QML y el nucleo 3D cae al plan B sin explicar por que.
+try:
+    from . import geometry as _geometry     # noqa: F401
+    GEOMETRY_OK = True
+    GEOMETRY_WHY = ""
+except Exception as _exc:                   # QtQuick3D ausente o sin driver
+    GEOMETRY_OK = False
+    GEOMETRY_WHY = str(_exc)[:160]
 
 
 def _orb_icon(size: int = 64) -> QIcon:
@@ -90,6 +102,7 @@ class CompanionApp:
 
         # ── puente y ventana ──────────────────────────────────────
         self.bridge = FridayBridge(self.bus, self._submit, self._loop)
+        self.bridge.set_ptt(self.cfg.ptt_hint())
         self._build_window()
         self._build_tray()
 
@@ -115,8 +128,10 @@ class CompanionApp:
         ctx = view.rootContext()
         ctx.setContextProperty("friday", self.bridge)
         ctx.setContextProperty("appWindow", view)
+        ctx.setContextProperty("hudCfg", self._hud_config())
 
         view.engine().addImportPath(str(QML_DIR))
+        view.engine().addImageProvider(PROVIDER_ID, SpriteProvider())
         view.setSource(QUrl.fromLocalFile(str(QML_DIR / "Companion.qml")))
 
         if view.status() == QQuickView.Error:
@@ -142,6 +157,27 @@ class CompanionApp:
 
         self.view = view
 
+    def _hud_config(self) -> dict[str, Any]:
+        """`[desktop.core]` tal cual, para que QML lo lea sin conocer el toml.
+
+        Si la geometria no se pudo importar se fuerza el plan B aqui, en
+        Python, en vez de dejar que QML lo descubra fallando: asi el motivo
+        aparece en la consola una vez y no como un error de QML sin contexto.
+        """
+        mode = str(self.cfg.get("desktop.core.mode", "quick3d"))
+        if mode == "quick3d" and not GEOMETRY_OK:
+            print(f"[desktop] sin QtQuick3D, uso el nucleo 2.5D: {GEOMETRY_WHY}")
+            mode = "projected"
+        return {
+            "mode": mode,
+            "nodes": int(self.cfg.get("desktop.core.nodes", 1400)),
+            "spokes": int(self.cfg.get("desktop.core.spokes", 28)),
+            "dust": int(self.cfg.get("desktop.core.dust", 260)),
+            "bloom": bool(self.cfg.get("desktop.core.bloom", True)),
+            "depth_field": bool(self.cfg.get("desktop.core.depth_field", True)),
+            "fov": float(self.cfg.get("desktop.core.fov", 42)),
+        }
+
     def _place(self, view: QQuickView, size: QSize) -> None:
         """Esquina inferior derecha por defecto, respetando la barra de tareas."""
         screen = QGuiApplication.primaryScreen()
@@ -162,7 +198,7 @@ class CompanionApp:
         if not QSystemTrayIcon.isSystemTrayAvailable():
             return
         tray = QSystemTrayIcon(_orb_icon(), self.app)
-        tray.setToolTip("F.R.I.D.A.Y — manten ESPACIO y habla")
+        tray.setToolTip(f"F.R.I.D.A.Y — {self.cfg.ptt_hint()} y habla")
 
         menu = QMenu()
         act_show = menu.addAction("Mostrar")

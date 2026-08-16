@@ -13,7 +13,7 @@ from PySide6.QtCore import Property, QObject, Signal, Slot
 
 from core.bus import Bus, Event
 
-# estados del orbe — el nombre lo consume QML para elegir color y ritmo
+# estados del nucleo — el nombre lo consume QML para elegir color y ritmo
 IDLE, LISTENING, THINKING, SPEAKING, ERROR, WAITING = (
     "idle", "listening", "thinking", "speaking", "error", "waiting")
 
@@ -27,6 +27,8 @@ class FridayBridge(QObject):
     responseChanged = Signal()
     pendingChanged = Signal()
     statusChanged = Signal()
+    modelChanged = Signal()
+    pttChanged = Signal()
     logAppended = Signal(str, str)        # (quien, texto)
 
     def __init__(self, bus: Bus, submit: Callable[[str], Any],
@@ -43,6 +45,8 @@ class FridayBridge(QObject):
         self._pending = ""
         self._status = "iniciando"
         self._skill = ""
+        self._model = ""
+        self._ptt = ""
 
         bus.on("*", self._on_event)
 
@@ -86,6 +90,16 @@ class FridayBridge(QObject):
         return self._skill
 
     skill = Property(str, _get_skill, notify=responseChanged)
+
+    def _get_model(self) -> str:
+        return self._model
+
+    model = Property(str, _get_model, notify=modelChanged)
+
+    def _get_ptt(self) -> str:
+        return self._ptt
+
+    ptt = Property(str, _get_ptt, notify=pttChanged)
 
     # ══════════════════════════════ de QML hacia Python
     @Slot(str)
@@ -154,6 +168,17 @@ class FridayBridge(QObject):
         elif topic == "tts.done":
             self._set_state(WAITING if self._pending else IDLE)
 
+        elif topic == "engine.switched":
+            # El modelo activo se muestra siempre: cambiarlo por voz sin
+            # verlo reflejado deja al usuario sin saber quien esta pensando.
+            self._model = str(d.get("label", ""))
+            self.modelChanged.emit()
+            self.logAppended.emit("sys", f"motor → {self._model}")
+
+        elif topic == "voice.ptt.ready":
+            self._ptt = str(d.get("hint", "")) or f"pulsa {d.get('key', '')}".strip()
+            self.pttChanged.emit()
+
         elif topic == "core.error":
             self._set_state(ERROR)
             self.logAppended.emit("error", str(d.get("message", "")))
@@ -168,3 +193,12 @@ class FridayBridge(QObject):
     def set_status(self, text: str) -> None:
         self._status = text
         self.statusChanged.emit()
+
+    def set_model(self, label: str) -> None:
+        """El modelo de arranque. Despues lo mantiene `engine.switched`."""
+        self._model = label
+        self.modelChanged.emit()
+
+    def set_ptt(self, hint: str) -> None:
+        self._ptt = hint
+        self.pttChanged.emit()

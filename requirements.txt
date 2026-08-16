@@ -3,7 +3,7 @@
 # API de terceros en ejecucion.
 
 # --- acompanante (ventana nativa, no navegador) ---
-PySide6>=6.6              # Qt Quick: el orbe y el panel de cristal
+PySide6>=6.6              # Qt Quick + QtQuick3D: el nucleo y el panel
 
 # --- nucleo ---
 psutil>=5.9               # vitales del sistema

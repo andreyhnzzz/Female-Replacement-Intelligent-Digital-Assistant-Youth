@@ -1,4 +1,4 @@
-// El acompañante. Orbe siempre presente; el panel de cristal se despliega
+// El acompañante. Nucleo siempre presente; el panel de cristal se despliega
 // cuando hay algo que decir y se repliega cuando no.
 //
 // Nada de cortes abruptos: todo entra por desvanecimiento luminoso.
@@ -104,6 +104,22 @@ Item {
                     font { family: "Cascadia Mono, Consolas, monospace"; pixelSize: 11; letterSpacing: 3.4; bold: true }
                 }
                 Item { Layout.fillWidth: true }
+
+                // Quien esta pensando. Se puede cambiar hablando, asi que
+                // tiene que verse: un cambio de modelo invisible es un cambio
+                // en el que no puedes confiar.
+                Text {
+                    text: friday.model
+                    color: root.gold
+                    opacity: 0.75
+                    visible: text.length > 0
+                    font { family: "Cascadia Mono, Consolas, monospace"; pixelSize: 10; letterSpacing: 1.2 }
+                }
+                Rectangle {
+                    width: 1; height: 9
+                    visible: friday.model.length > 0 && friday.skill.length > 0
+                    color: Qt.rgba(root.amber.r, root.amber.g, root.amber.b, 0.3)
+                }
                 Text {
                     text: friday.skill
                     color: root.dim
@@ -215,7 +231,9 @@ Item {
 
                         Text {
                             anchors.verticalCenter: parent.verticalCenter
-                            text: "escribe, o manten ESPACIO y habla"
+                            text: friday.ptt
+                                ? "escribe, o " + friday.ptt + " y habla"
+                                : "escribe tu peticion"
                             color: root.dim
                             visible: !input.text && !input.activeFocus
                             font: input.font
@@ -226,25 +244,26 @@ Item {
         }
     }
 
-    // ══════════════════════ el orbe
+    // ══════════════════════ el nucleo
     Item {
         id: orbHost
-        width: 250
-        height: 250
+        width: 268
+        height: 268
         anchors {
             right: parent.right
             verticalCenter: parent.verticalCenter
-            rightMargin: 18
+            rightMargin: 12
         }
 
-        Orb {
-            anchors.centerIn: parent
+        HoloCore {
+            id: holo
+            anchors.fill: parent
             state_: friday.state
             level: friday.level
-            base: 92
+            base: 96
         }
 
-        // arrastrar la ventana desde el orbe
+        // arrastrar la ventana desde el nucleo
         MouseArea {
             anchors.fill: parent
             acceptedButtons: Qt.LeftButton | Qt.RightButton
@@ -255,7 +274,7 @@ Item {
         }
     }
 
-    // ══════════════════════ estado bajo el orbe
+    // ══════════════════════ estado bajo el nucleo
     Text {
         anchors { horizontalCenter: orbHost.horizontalCenter; top: orbHost.bottom; topMargin: -18 }
         text: friday.state === "listening" ? "escuchando"
