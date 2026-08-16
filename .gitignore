@@ -1,7 +1,11 @@
 .venv/
 __pycache__/
 *.pyc
-logs/*.log
+
+# La bitacora registra los eventos del bus, y ahi van tus transcripciones
+# de voz. Nada de logs/ se versiona: solo la carpeta.
+logs/*
+!logs/.gitkeep
 
 # Modelos de voz: pesados y se bajan solos con setup.ps1
 models/piper/*.onnx
