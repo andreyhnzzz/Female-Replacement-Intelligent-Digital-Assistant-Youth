@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="es" data-theme="{{THEME}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>F.R.I.D.A.Y OS</title>
+<link rel="stylesheet" href="/static/hud.css">
+</head>
+<body>
+<div class="scan"></div>
+<div class="grain"></div>
+
+<div class="os">
+
+  <!-- ══════════════ BARRA SUPERIOR ══════════════ -->
+  <header class="bar">
+    <div class="brand">
+      <span class="dot" id="pulse"></span>
+      <b>{{NAME}}</b><span class="sub">OS</span>
+    </div>
+    <div class="chips">
+      <span class="chip" id="c-engine">motor —</span>
+      <span class="chip" id="c-stt">stt —</span>
+      <span class="chip" id="c-tts">tts —</span>
+      <span class="chip" id="c-link">enlace —</span>
+    </div>
+    <div class="clock"><span id="clock">--:--:--</span><em id="date">—</em></div>
+  </header>
+
+  <!-- ══════════════ COLUMNA IZQUIERDA ══════════════ -->
+  <section class="panel col-l" id="p-vitals">
+    <h2>vitales</h2>
+    <div class="gauges">
+      <div class="gauge"><div class="ring" id="g-cpu"><b>—</b></div><span>cpu</span></div>
+      <div class="gauge"><div class="ring" id="g-ram"><b>—</b></div><span>ram</span></div>
+      <div class="gauge"><div class="ring" id="g-disk"><b>—</b></div><span>disco</span></div>
+    </div>
+    <dl class="kv" id="vital-kv">
+      <dt>uptime</dt><dd id="v-uptime">—</dd>
+      <dt>procesos</dt><dd id="v-procs">—</dd>
+      <dt>bateria</dt><dd id="v-bat">—</dd>
+      <dt>red tx/rx</dt><dd id="v-net">—</dd>
+    </dl>
+  </section>
+
+  <section class="panel col-l" id="p-audio">
+    <h2>audio i/o <i id="a-state">inactivo</i></h2>
+    <div class="meter"><div class="fill" id="a-level"></div></div>
+    <canvas id="wave" height="46"></canvas>
+    <div class="ptt" id="ptt-hint">
+      <kbd id="ptt-key">SPACE</kbd> manten y habla
+    </div>
+    <dl class="kv">
+      <dt>entrada</dt><dd id="a-in">local · 16 kHz</dd>
+      <dt>salida</dt><dd id="a-out">—</dd>
+      <dt>ultima</dt><dd id="a-last">—</dd>
+    </dl>
+  </section>
+
+  <section class="panel col-l" id="p-cmd">
+    <h2>comandos</h2>
+    <ul class="cmds" id="cmds"></ul>
+  </section>
+
+  <!-- ══════════════ CENTRO ══════════════ -->
+  <section class="panel center" id="p-out">
+    <h2>salida <i id="o-meta">—</i></h2>
+    <article class="md" id="out">
+      <div class="boot" id="boot"></div>
+    </article>
+  </section>
+
+  <section class="panel center short" id="p-log">
+    <h2>transcripcion</h2>
+    <div class="log" id="log"></div>
+    <form class="entry" id="entry">
+      <span class="caret">&gt;</span>
+      <input id="input" autocomplete="off" spellcheck="false"
+             placeholder="escribe, o manten SPACE para hablar">
+    </form>
+  </section>
+
+  <!-- ══════════════ COLUMNA DERECHA ══════════════ -->
+  <section class="panel col-r" id="p-agenda">
+    <h2>agenda <i id="ag-count">—</i></h2>
+    <div class="agenda" id="agenda"><p class="muted">sin datos</p></div>
+  </section>
+
+  <section class="panel col-r" id="p-vault">
+    <h2>vault</h2>
+    <div class="stats" id="vstats">
+      <div><b id="s-notes">—</b><span>notas</span></div>
+      <div><b id="s-links">—</b><span>enlaces</span></div>
+      <div><b id="s-tags">—</b><span>tags</span></div>
+      <div><b id="s-words">—</b><span>palabras</span></div>
+    </div>
+    <canvas id="graph"></canvas>
+    <div class="zones" id="zones"></div>
+  </section>
+
+  <section class="panel col-r" id="p-skills">
+    <h2>skills</h2>
+    <ul class="skills" id="skills"></ul>
+  </section>
+
+</div>
+<script src="/static/hud.js"></script>
+</body>
+</html>
