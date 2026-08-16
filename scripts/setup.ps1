@@ -43,7 +43,7 @@ Write-Host "  instalando dependencias (esto tarda la primera vez)..." -Foregroun
 & $vpy -m pip install -r "$root\requirements.txt"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "  Algo fallo. Reintenta sin piper:" -ForegroundColor Yellow
-    Write-Host "  .venv\Scripts\python -m pip install aiohttp psutil numpy sounddevice pynput faster-whisper pyttsx3" -ForegroundColor DarkGray
+    Write-Host "  .venv\Scripts\python -m pip install PySide6 psutil numpy pywin32 sounddevice pynput faster-whisper pyttsx3" -ForegroundColor DarkGray
     exit 1
 }
 Write-Host "  [ok] dependencias" -ForegroundColor Green
@@ -73,6 +73,10 @@ Write-Host ""
 & $vpy "$root\friday.py" --check
 
 Write-Host ""
-Write-Host "  Listo. Arranca con:" -ForegroundColor Yellow
-Write-Host "    .\scripts\run.ps1" -ForegroundColor White
+Write-Host "  Listo." -ForegroundColor Yellow
+Write-Host "    .\scripts\run.ps1            acompanante + voz" -ForegroundColor White
+Write-Host "    .\scripts\run.ps1 -Silent    sin ventana de consola detras" -ForegroundColor DarkGray
+Write-Host "    .\scripts\run.ps1 -Preview   solo la interfaz, para ver el diseno" -ForegroundColor DarkGray
+Write-Host ""
+Write-Host "  Manten ESPACIO y habla. El icono queda en la bandeja." -ForegroundColor DarkYellow
 Write-Host ""
