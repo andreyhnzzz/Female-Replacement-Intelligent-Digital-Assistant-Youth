@@ -498,6 +498,15 @@ El HUD se revisa mirándolo, no leyéndolo:
 
 ---
 
+## 🧭 Qué falta
+
+Lo pendiente, lo decidido a conciencia y lo de algún día está en
+**[ROADMAP.md](ROADMAP.md)**. Lo más inmediato: controles de Bluetooth, wifi y
+brillo, y que cuando no sepa hacer algo lo diga por su nombre en vez de un
+genérico *"no me quedó claro"*.
+
+---
+
 <div align="center">
 
 **F.R.I.D.A.Y no vive en un servidor de otro. Vive en tu escritorio.**
