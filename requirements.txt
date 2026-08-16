@@ -1,17 +1,27 @@
-# F.R.I.D.A.Y OS — Python 3.12 recomendado
-# Todo corre local. Nada de esto llama a una API de terceros en ejecucion.
+# F.R.I.D.A.Y — Python 3.12 recomendado
+# Acompanante de escritorio. Todo corre local: nada de esto llama a una
+# API de terceros en ejecucion.
 
-# --- nucleo / HUD ---
-aiohttp>=3.9
-psutil>=5.9
+# --- acompanante (ventana nativa, no navegador) ---
+PySide6>=6.6              # Qt Quick: el orbe y el panel de cristal
+
+# --- nucleo ---
+psutil>=5.9               # vitales del sistema
+numpy>=1.26
+
+# --- acceso al sistema (Windows) ---
+pywin32>=306              # ventanas, foco, procesos
+mss>=9.0                  # captura de pantalla (solo si activas OCR)
 
 # --- voz ---
-numpy>=1.26
 sounddevice>=0.4.6        # captura y reproduccion
 pynput>=1.7.6             # push-to-talk global
 faster-whisper>=1.0.3     # STT local (CTranslate2, sin nube)
 
-# --- TTS (elige uno; el codigo cae al que exista) ---
+# --- TTS (basta con uno; el codigo cae al que exista) ---
 pyttsx3>=2.90             # SAPI5 de Windows, local, cero descargas
 piper-tts>=1.2.0          # voz neuronal local (mejor calidad)
 soundfile>=0.12           # solo si usas piper por CLI
+
+# --- opcionales ---
+# pytesseract             # OCR de pantalla; requiere el binario tesseract
