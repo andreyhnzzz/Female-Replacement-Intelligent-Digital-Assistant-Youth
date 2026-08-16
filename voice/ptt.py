@@ -1,7 +1,19 @@
-"""Push-to-talk. Manten la barra y habla.
+"""Push-to-talk. Pulsa F9 y habla.
 
 Listener global de teclado (hilo aparte) + captura de audio en RAM.
 El buffer nunca toca el disco salvo que lo pidas explicitamente.
+
+Dos modos, y la diferencia esta en donde vive la decision:
+
+  hold    la tecla ES el microfono. Bajar abre, soltar cierra. A prueba de
+          errores: si sueltas, se acabo.
+  toggle  la tecla es un interruptor. Pulsar abre, pulsar cierra. Toda la
+          logica vive en `on_press` — repartirla entre press y release
+          hace que la primera pulsacion abra y cierre en el mismo gesto.
+
+El teclado repite `on_press` mientras la tecla sigue abajo, asi que hace
+falta recordar el flanco: sin eso, mantener F9 medio segundo en modo toggle
+abre y cierra el microfono treinta veces.
 """
 from __future__ import annotations
 
@@ -18,6 +30,7 @@ from core.bus import Bus
 class PushToTalk:
     def __init__(self, cfg, bus: Bus):
         self.bus = bus
+        self.cfg = cfg
         self.key_name = cfg.get("voice.ptt.key", "space")
         self.mode = cfg.get("voice.ptt.mode", "hold")
         self.min_dur = float(cfg.get("voice.ptt.min_duration_s", 0.35))
@@ -26,6 +39,7 @@ class PushToTalk:
 
         self.recording = False
         self.enabled = True
+        self._held = False               # flanco de la tecla, no estado del micro
         self._frames: list[np.ndarray] = []
         self._q: queue.Queue[np.ndarray] = queue.Queue()
         self._stream: Any = None
@@ -39,6 +53,11 @@ class PushToTalk:
     def level(self) -> float:
         return round(self._level, 4)
 
+    @property
+    def hint(self) -> str:
+        """Como se le dice al usuario que hable. Lo consume el acompanante."""
+        return self.cfg.ptt_hint()
+
     # -- ciclo de vida -------------------------------------------------
     def start(self) -> None:
         from pynput import keyboard
@@ -46,30 +65,46 @@ class PushToTalk:
         target = self._resolve_key(keyboard)
 
         def on_press(key):
-            if not self.enabled or self.recording:
-                return
             if self._is(key, target):
-                if self.mode == "toggle" and self.recording:
-                    return
-                self._begin()
+                self.key_down()
 
         def on_release(key):
             if self._is(key, target):
-                if self.mode == "hold" and self.recording:
-                    self._end()
-                elif self.mode == "toggle":
-                    self._end() if self.recording else self._begin()
+                self.key_up()
 
         self._listener = keyboard.Listener(on_press=on_press, on_release=on_release)
         self._listener.daemon = True
         self._listener.start()
-        self.bus.emit_threadsafe("voice.ptt.ready", key=self.key_name, mode=self.mode)
+        self.bus.emit_threadsafe("voice.ptt.ready", key=self.key_name,
+                                 mode=self.mode, hint=self.hint)
 
     def stop(self) -> None:
         if self.recording:
             self._end()
         if self._listener:
             self._listener.stop()
+
+    # -- maquina de estados de la tecla --------------------------------
+    # Separada del listener a proposito: es la parte con reglas y por tanto
+    # la parte que puede equivocarse. Aqui se puede probar sin teclado, sin
+    # microfono y sin pynput instalado.
+    def key_down(self) -> None:
+        if self._held:                   # auto-repeticion: no es una pulsacion nueva
+            return
+        self._held = True
+        if not self.enabled:
+            return
+        if self.mode == "toggle":
+            self._end() if self.recording else self._begin()
+        elif not self.recording:
+            self._begin()
+
+    def key_up(self) -> None:
+        self._held = False
+        # En toggle, soltar no significa nada: el microfono sigue abierto
+        # hasta la siguiente pulsacion o hasta `max_duration_s`.
+        if self.mode == "hold" and self.recording:
+            self._end()
 
     # -- grabacion -----------------------------------------------------
     def _begin(self) -> None:

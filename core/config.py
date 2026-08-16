@@ -44,11 +44,23 @@ class Config:
     def vault_root(self) -> Path:
         return self.path_of("vault.root", "vault")
 
+    def ptt_hint(self) -> str:
+        """Como se le dice al usuario que hable.
+
+        Vive aqui porque lo necesitan dos capas que no se conocen: `voice/`
+        para anunciarlo por el bus y `desktop/` para pintarlo antes de que la
+        voz haya arrancado siquiera. Duplicar el formato garantizaria que un
+        dia digan cosas distintas.
+        """
+        key = str(self.get("voice.ptt.key", "space")).upper()
+        mode = str(self.get("voice.ptt.mode", "hold"))
+        return f"pulsa {key}" if mode == "toggle" else f"manten {key}"
+
     def persona(self) -> str:
         """Texto de persona con los placeholders resueltos."""
         pf = self.path_of("identity.persona_file", "config/persona.md")
         text = pf.read_text(encoding="utf-8") if pf.exists() else ""
-        return text.replace("{user_title}", self.get("identity.user_title", "Boss"))
+        return text.replace("{user_title}", self.get("identity.user_title", "Jefe"))
 
     def reload(self) -> None:
         with open(self.path, "rb") as fh:

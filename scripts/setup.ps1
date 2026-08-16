@@ -78,5 +78,5 @@ Write-Host "    .\scripts\run.ps1            acompanante + voz" -ForegroundColor
 Write-Host "    .\scripts\run.ps1 -Silent    sin ventana de consola detras" -ForegroundColor DarkGray
 Write-Host "    .\scripts\run.ps1 -Preview   solo la interfaz, para ver el diseno" -ForegroundColor DarkGray
 Write-Host ""
-Write-Host "  Manten ESPACIO y habla. El icono queda en la bandeja." -ForegroundColor DarkYellow
+Write-Host "  Pulsa F9 y habla. El icono queda en la bandeja." -ForegroundColor DarkYellow
 Write-Host ""
