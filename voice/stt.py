@@ -6,6 +6,7 @@ de privacidad de core lo va a gritar.
 """
 from __future__ import annotations
 
+import os
 import time
 from typing import Any
 
@@ -28,11 +29,26 @@ class LocalSTT:
         self.info = ""
 
     # -- carga ---------------------------------------------------------
-    def load(self) -> None:
+    def load(self, allow_download: bool = False) -> None:
+        """Carga el modelo. Por defecto, **estrictamente offline**.
+
+        Aunque el modelo ya este en cache, huggingface_hub sale a la red a
+        validar la revision; con el candado de privacidad activo eso aborta
+        la carga entera y te quedas sin voz. `local_files_only` le dice que
+        use lo que hay en disco y no le pregunte a nadie.
+
+        Solo `--allow-model-download` abre la red, y solo esa vez.
+        """
         if self._model is not None:
             return
         if self.engine != "faster_whisper":
             raise NotImplementedError(f"STT '{self.engine}' no implementado todavia.")
+
+        if not allow_download:
+            # cinturon y tirantes: hay rutas de HF que ignoran local_files_only
+            os.environ.setdefault("HF_HUB_OFFLINE", "1")
+            os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
         from faster_whisper import WhisperModel
 
         device = self.device
@@ -40,7 +56,9 @@ class LocalSTT:
             device = "cuda" if self._has_cuda() else "cpu"
         compute = self.compute if device == "cpu" else "float16"
         t0 = time.time()
-        self._model = WhisperModel(self.model_name, device=device, compute_type=compute)
+        self._model = WhisperModel(self.model_name, device=device,
+                                   compute_type=compute,
+                                   local_files_only=not allow_download)
         self.ready = True
         self.info = f"{self.model_name}/{device}/{compute} ({time.time() - t0:.1f}s)"
 
