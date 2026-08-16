@@ -1,19 +1,19 @@
 # ==========================================================
-#  F.R.I.D.A.Y OS  —  configuracion maestra
-#  Todo es modular: cambia un valor, no toques el codigo.
+#  F.R.I.D.A.Y  —  configuracion maestra
+#  Acompañante de escritorio. Todo es modular: cambia un
+#  valor, no toques el codigo.
 # ==========================================================
 
 [identity]
 name         = "F.R.I.D.A.Y"
 long_name    = "Female Replacement Intelligent Digital Assistant Youth"
 user_title   = "Boss"                  # como te llama FRIDAY
-language     = "es"                    # es | en
+language     = "es"
 persona_file = "config/persona.md"
 
 # ----------------------------------------------------------
 # MOTOR  —  quien piensa.
 # backend: claude_code | ollama | openai_compat
-# Cualquier modelo local funciona: solo cambia el backend.
 # ----------------------------------------------------------
 [engine]
 backend      = "claude_code"
@@ -21,32 +21,77 @@ timeout_s    = 180
 max_turns    = 6
 
 [engine.claude_code]
-binary        = "claude"
-model         = "claude-opus-5"
+binary          = "claude"
+model           = "claude-opus-5"
 permission_mode = "acceptEdits"
-allowed_tools = ["Read", "Write", "Edit", "Glob", "Grep", "Bash"]
-# cwd del motor = la raiz de FRIDAY-OS (ve el vault como archivos)
+# solo se usan en modo agentico; el razonamiento corre sin herramientas
+allowed_tools   = ["Read", "Write", "Edit", "Glob", "Grep"]
 
 [engine.ollama]
 host  = "http://127.0.0.1:11434"
 model = "llama3.1:8b"
 
 [engine.openai_compat]
-# llama.cpp server, LM Studio, vLLM, text-generation-webui...
 base_url = "http://127.0.0.1:8080/v1"
 model    = "local-model"
 api_key  = "not-needed"
+
+# ----------------------------------------------------------
+# ACOMPANANTE  —  la ventana flotante.
+# ----------------------------------------------------------
+[desktop]
+width         = 760
+height        = 460
+corner        = "bottom-right"   # bottom-right | bottom-left | top-right | top-left
+margin        = 24
+level_ms      = 60               # refresco del nivel de audio del orbe
+always_on_top = true
+# Desenfoque real de Windows 11 tras la ventana: none | acrylic | mica | tabbed
+# «none» deja el orbe flotando sobre el escritorio (recomendado).
+# «acrylic» da cristal de verdad, pero el efecto cubre TODA la ventana y el
+# orbe pierde el fondo transparente. Es una eleccion estetica.
+backdrop      = "none"
+
+# ----------------------------------------------------------
+# SISTEMA  —  las manos sobre la computadora.
+# ----------------------------------------------------------
+[system]
+app_cache_s      = 120       # TTL del catalogo del Menu Inicio
+max_scan         = 40000     # tope de archivos por busqueda
+search_engine    = "default" # default | google | bing | youtube | github | wikipedia
+allow_ocr        = false     # requiere tesseract instalado
+screen_max_chars = 4000
+
+# ----------------------------------------------------------
+# POLITICA  —  el guardia. Nada con efecto pasa sin permiso.
+# El STT se equivoca; esto evita que un error de
+# reconocimiento se convierta en un desastre.
+# ----------------------------------------------------------
+[policy]
+enabled            = true
+allow_launch       = true     # abrir aplicaciones
+allow_file_write   = true     # mover, renombrar, organizar
+allow_shell        = false    # ejecutar comandos crudos: apagado por defecto
+allow_web          = true     # abrir busquedas en el navegador
+confirm_over_files = 5        # sobre este numero, pide confirmacion hablada
+
+# Donde PUEDE escribir. Fuera de aqui, no.
+write_roots = ["~/Documents", "~/Downloads", "~/Desktop", "~/Pictures"]
+# Donde puede leer y buscar.
+read_roots  = ["~"]
+# Nunca se lanzan, aunque esten instalados.
+blocked_apps = ["regedit*", "diskpart*", "cmd.exe", "powershell*"]
 
 # ----------------------------------------------------------
 # MEMORIA  —  solo markdown. Sin base de datos. Nunca.
 # ----------------------------------------------------------
 [vault]
 root         = "vault"
-raw          = "raw"        # captura cruda: transcripciones, notas sueltas
-wiki         = "wiki"       # notas atomicas enlazadas -> el grafo
-outputs      = "outputs"    # lo que FRIDAY produce: planes, resumenes
+raw          = "raw"
+wiki         = "wiki"
+outputs      = "outputs"
 daily_format = "%Y-%m-%d"
-index_ttl_s  = 3            # re-escanea el vault si paso mas de esto
+index_ttl_s  = 3
 
 # ----------------------------------------------------------
 # VOZ  —  100% local. El audio NUNCA sale de este equipo.
@@ -55,60 +100,48 @@ index_ttl_s  = 3            # re-escanea el vault si paso mas de esto
 enabled = true
 
 [voice.ptt]
-key            = "space"    # manten la barra y habla
-mode           = "hold"     # hold | toggle
-require_focus  = false      # false = hotkey global
-min_duration_s = 0.35       # ignora toques accidentales
+key            = "space"
+mode           = "hold"
+require_focus  = false
+min_duration_s = 0.35
 max_duration_s = 60.0
 
 [voice.stt]
-engine       = "faster_whisper"   # faster_whisper | whisper_cpp | vosk
-model        = "small"            # tiny | base | small | medium | large-v3
-device       = "auto"             # auto | cpu | cuda
+engine       = "faster_whisper"
+model        = "small"
+device       = "auto"
 compute_type = "int8"
 language     = "es"
 sample_rate  = 16000
 vad_filter   = true
 
 [voice.tts]
-engine    = "piper"        # piper | sapi5 | none
+engine    = "piper"
 voice     = "es_MX-claude-high"
 model_dir = "models/piper"
 speed     = 1.05
 volume    = 0.9
-# fallback automatico a SAPI5 (Windows, tambien local) si piper no esta
 
 # ----------------------------------------------------------
-# HUD  —  La Cara. Una sola pantalla, sin pestanas.
-# ----------------------------------------------------------
-[hud]
-enabled     = true
-host        = "127.0.0.1"
-port        = 8787
-autolaunch  = true
-kiosk       = true          # abre en ventana de app, sin barra del navegador
-theme       = "amber"       # amber | cyan | ice
-refresh_ms  = 1000
-
-# ----------------------------------------------------------
-# SKILLS  —  las 5 manos de FRIDAY
+# SKILLS
 # ----------------------------------------------------------
 [skills]
-enabled = ["metricas", "inbox", "plan", "vault", "agenda"]
+enabled = ["metricas", "inbox", "plan", "vault", "agenda",
+           "sistema", "archivos", "pantalla"]
 
 [skills.metricas]
-sources        = ["vault/wiki", "vault/raw"]
+sources         = ["vault/wiki", "vault/raw"]
 frontmatter_key = "metric"
-include_system = true       # CPU/RAM/disco como vitales
+include_system  = true
 
 [skills.inbox]
-lookback_h  = 24
-max_items   = 12
-write_to    = "outputs"
+lookback_h = 24
+max_items  = 12
+write_to   = "outputs"
 
 [skills.plan]
-top_n     = 3
-write_to  = "outputs"
+top_n           = 3
+write_to        = "outputs"
 mirror_to_daily = true
 
 [skills.vault]
@@ -116,13 +149,23 @@ allow_write = true
 max_read_kb = 256
 
 [skills.agenda]
-file       = "wiki/Agenda.md"
+file         = "wiki/Agenda.md"
 horizon_days = 7
+
+[skills.sistema]
+prefer_focus = true          # si ya esta abierto, enfocar en vez de relanzar
+
+[skills.archivos]
+max_results    = 15
+rename_pattern = "{date} — {name}"
+
+[skills.pantalla]
+log_reads = true             # cada lectura de pantalla queda anotada
 
 # ----------------------------------------------------------
 # PRIVACIDAD  —  candados duros
 # ----------------------------------------------------------
 [privacy]
-local_only_audio  = true    # aborta si un STT/TTS intenta salir a la red
-log_transcripts   = true    # se guardan en vault/raw (tu disco)
-redact_in_logs    = []      # palabras a censurar en logs
+local_only_audio = true      # bloquea la red durante STT/TTS
+log_transcripts  = true      # se guardan en vault/raw (tu disco)
+redact_in_logs   = []
