@@ -27,6 +27,7 @@ lee las noticias, investiga en internet y recuerda.
 tu voz ─▶ F9 ─▶ STT local ─▶ Router ─▶ Skill ─┬─▶ vault/*.md   memoria
                                     │         ├─▶ sistema      apps · ventanas · web
                                     │         ├─▶ archivos     buscar · ordenar · renombrar
+                                    │         ├─▶ ordenador    volumen · medios · portapapeles
                                     │         ├─▶ noticias     RSS · resumen · briefing
                                     │         ├─▶ web          investigar · leer páginas
                                     │         ├─▶ pantalla     contexto de lo que ves
@@ -51,6 +52,7 @@ oye se queda en tu equipo.
 | 🌐 **Sale al mundo, con cuidado** | Lee noticias por RSS y responde con lo que investigó — nunca raspa un buscador ni finge ser otro. |
 | 🗂️ **Memoria que no depende de FRIDAY** | Todo es markdown plano en tu disco. Bórrala mañana y tus notas siguen ahí, legibles con cualquier editor. |
 | 💠 **Un HUD que reacciona, no decora** | Holograma 3D real cuyos nodos hierven al pensar y respiran con tu voz al escuchar. |
+| 🎛️ **Entiende, no reconoce frases** | *"esto suena altísimo"* baja el volumen más que *"bájale"*. La acción la decide el motor contra un catálogo, no una regex por variante. |
 
 ---
 
@@ -124,7 +126,7 @@ Arrástralo desde el núcleo. Clic derecho para el menú, doble clic para escrib
 
 ---
 
-## 🧠 Las 11 skills
+## 🧠 Las 12 skills
 
 FRIDAY enruta sola. No hay que invocarlas por nombre.
 
@@ -135,6 +137,7 @@ FRIDAY enruta sola. No hay que invocarlas por nombre.
 | **sistema** | *"abre Spotify"* · *"abre YouTube"* · *"qué tengo abierto"* · *"busca gatos en google"* |
 | **archivos** | *"organiza mis descargas"* · *"busca el archivo presupuesto"* · *"renombra …"* |
 | **pantalla** | *"qué estoy viendo"* · *"explícame esto"* |
+| **ordenador** | *"no te oigo"* · *"ponlo a la mitad"* · *"sáltate esta canción"* · *"qué tengo copiado"* |
 
 ### 🌐 Sobre el mundo
 
@@ -210,6 +213,49 @@ el roster. Nada fuera de `core/engine.py` sabe que Claude existe.
 
 ---
 
+## 🎛️ Control del ordenador: entender, no reconocer
+
+Volumen, reproducción, portapapeles, bloqueo de sesión y ventanas. Lo que hace
+distinta a esta skill es **cómo decide**.
+
+El resto enruta con expresiones regulares, y está bien: *"abre Spotify"*
+siempre significa lo mismo y resolverlo en 0 ms sin gastar una llamada es una
+virtud. Pero el control del escritorio no se comporta así:
+
+```
+› no te oigo                 → sube el volumen 20 puntos
+› esto suena altísimo, bájale → lo baja 30   ← más, porque «altísimo»
+› ponlo a la mitad            → nivel absoluto 50
+› sáltate esta canción        → siguiente pista
+› cópiame el correo de soporte arroba ejemplo punto com
+                              → escribe «soporte@ejemplo.com»
+```
+
+Son la misma familia de intención con cero palabras en común, y cada una lleva
+un argumento distinto dentro. Escribir una regex por variante es una carrera
+que se pierde. Aquí la regex solo sirve para llegar **a la skill**; qué acción
+concreta es, y con qué argumentos, lo decide el motor contra un catálogo
+declarado como datos. Añadir una capacidad es añadir una entrada a esa tupla.
+
+**Que el motor elija no significa que el motor mande.** Lo que devuelve es una
+propuesta: antes de tocar nada se comprueba que la acción existe en el
+catálogo, que el puerto está disponible y que la política la permite. Un
+modelo que alucine `formatear_disco` se estrella contra una lista blanca que
+no lo contiene — y hay una prueba que lo fija.
+
+```
+› bloquea el equipo que me voy
+  No puedo. El control de session está deshabilitado.
+  → activa `policy.allow_session` en config/friday.toml
+
+  (con el permiso puesto)
+  Voy a bloquear. ¿Confirmas?
+› sí
+  Hasta ahora, Jefe.
+```
+
+---
+
 ## 🛡️ La política: por qué es seguro
 
 El STT se equivoca. *"Organiza mis descargas"* mal reconocido no puede
@@ -223,6 +269,9 @@ allow_file_write   = true
 allow_shell        = false        # apagado por defecto
 allow_web          = true         # abrir búsquedas en TU navegador
 allow_web_fetch    = true         # que FRIDAY salga a la red por su cuenta
+allow_media        = true         # volumen y reproducción
+allow_clipboard    = true         # leer y escribir el portapapeles
+allow_session      = false        # bloquear/suspender: apagado por defecto
 confirm_over_files = 5            # sobre esto, pide confirmación hablada
 write_roots  = ["~/Documents", "~/Downloads", "~/Desktop", "~/Pictures"]
 blocked_apps = ["regedit*", "diskpart*", "cmd.exe", "powershell*"]
@@ -353,8 +402,8 @@ system/
   factory.py           lo único que sabe en qué SO corre
   net.py               ⭐ la única salida HTTP del proyecto
   files.py · web.py · news.py · pages.py
-  win32/               implementaciones de Windows
-skills/                las 11 manos
+  win32/               implementaciones de Windows (apps, ventanas, escritorio)
+skills/                las 12 manos
 voice/                 ptt · stt · tts
 desktop/
   app.py               ventana nativa + bandeja

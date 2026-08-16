@@ -74,6 +74,23 @@ construyen perezosamente y se cachean.
   el **tono**, nunca la estructura — si metes un contrato JSON ahí, pelea con el
   de cada skill y todo cae al fallback.
 
+## El control del ordenador: catálogo, no guiones
+
+`skills/ordenador.py` no elige la acción con regex. Sus `triggers` solo llevan
+**a la skill**; cuál de las nueve acciones es, y con qué argumentos, lo decide
+el motor contra `CATALOGO`, una tupla de `Accion` declarada como datos.
+
+Es deliberado y acotado: «bájale», «esto suena altísimo» y «ponlo a la mitad»
+son la misma familia con cero palabras en común, y una regex por variante es
+una carrera que se pierde. El resto de skills siguen con regex porque «abre
+Spotify» sí significa siempre lo mismo, y resolverlo en 0 ms es una virtud.
+
+**El motor propone, no dispone.** Lo que devuelve se valida contra el catálogo
+(lista blanca — un `formatear_disco` alucinado no existe), contra el puerto
+disponible y contra `policy.can_control()`. Añadir una capacidad es una entrada
+en la tupla más su rama en `_aplicar`; hay una prueba que fija que no se pueda
+declarar una sin implementar.
+
 ## El HUD
 
 `desktop/qml/HoloCore.qml` elige implementación según `[desktop.core] mode`:
@@ -115,6 +132,14 @@ atraganta, cae al plan B en vez de dejar el acompañante sin cara.
   semanas y muchos lo bloquean. Para temas se usa una API estable.
 
 ### Voz
+- **SAPI5 es COM con afinidad de apartamento.** Construirlo en un hilo y
+  usarlo en otro no da error: cuelga `runAndWait()` para siempre y FRIDAY se
+  queda muda el resto de la sesión. Todo lo que toca COM vive en el hilo
+  `tts`; `load()` solo detecta y `shutup()` levanta un evento en vez de
+  purgar desde fuera. Ver la cabecera de `voice/tts.py`.
+- **`pyttsx3` cachea el motor en un dict global del módulo** y su
+  `runAndWait()` vuelve antes de que acabe el audio, así que cada frase corta
+  a la anterior. Por eso se usa `comtypes` directo.
 - **El teclado repite `on_press` mientras la tecla sigue abajo.** En modo
   `toggle` eso abre y cierra el micrófono decenas de veces por pulsación. Hay
   que recordar el flanco (`_held`). La máquina de estados está separada del
