@@ -19,8 +19,10 @@ class PlanSkill(Skill):
     description = "Escribe el top 3 del dia y lo fija en el vault."
     triggers = [
         r"\bplan\b", r"\btop\s*3\b", r"\bprioridades?\b", r"\bqu[eé] hago\b",
-        r"\bplanear\b", r"\bplanifica\b", r"\benf[oó]ca\b", r"\bagenda del d[ií]a\b",
-        r"\borganiza\b", r"\bpor d[oó]nde empiezo\b",
+        r"\bplanear\b", r"\bplanifica\b", r"\bagenda del d[ií]a\b",
+        r"\bpor d[oó]nde empiezo\b", r"\borganiza(me)?\s+(el|mi)\s+d[ií]a\b",
+        # "enfocate en X" es planeacion; "enfoca chrome" es de sistema
+        r"\benf[oó]ca(te|me)?\s+en\b",
     ]
 
     async def run(self, ctx: SkillContext) -> SkillResult:
