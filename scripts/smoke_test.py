@@ -112,16 +112,37 @@ async def main() -> int:
         check("bloquea escape del vault", True)
 
     # ── enrutado rapido ──────────────────────────────────────
+    # Los casos interesantes son los que se pisan entre si. El puntaje mide
+    # la ESPECIFICIDAD del disparador, no su cobertura, y estas parejas son
+    # las que lo comprueban: si alguien cambia esa regla, aqui se rompe.
     cases = {
         "dame las metricas": "metricas",
         "resumen del dia": "inbox",
         "arma el plan de hoy": "plan",
         "recuerda que el servidor se cae los martes": "vault",
         "que tengo en la agenda": "agenda",
+
+        # noticias vs inbox: los dos reconocen «ponme al dia»
+        "ponme al dia con las noticias": "noticias",
+        "ponme al dia": "inbox",
+        "dame los titulares": "noticias",
+
+        # motor vs sistema: los dos reconocen «cambia a»
+        "cambia a sonnet": "motor",
+        "cambia a chrome": "sistema",
+        "que modelos tienes": "motor",
+
+        # web vs sistema vs vault: leer, abrir el navegador, o buscar en notas
+        "investiga que es una TPU": "web",
+        "busca gatos en google": "sistema",
+        "resume esta pagina https://ejemplo.com": "web",
+        "busca el archivo presupuesto": "archivos",
+
+        "que tengo abierto": "sistema",
     }
     for text, expected in cases.items():
         r = await router.decide(text)
-        check(f"ruta «{text[:30]}»", r.skill == expected,
+        check(f"ruta «{text[:34]}»", r.skill == expected,
               f"-> {r.skill} ({r.how}, {r.confidence})")
 
     # ── skills de verdad ─────────────────────────────────────

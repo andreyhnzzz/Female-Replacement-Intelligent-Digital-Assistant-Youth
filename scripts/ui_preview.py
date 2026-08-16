@@ -5,9 +5,18 @@ sistema. Sirve para iterar el diseño en segundos en vez de esperar a que
 cargue el modelo de voz.
 
     python scripts/ui_preview.py                 estado inactivo
-    python scripts/ui_preview.py listening       con el orbe escuchando
-    python scripts/ui_preview.py thinking        procesando
+    python scripts/ui_preview.py listening       el nucleo escuchando
+    python scripts/ui_preview.py thinking        procesando: los nodos hierven
     python scripts/ui_preview.py waiting         con confirmacion pendiente
+
+    python scripts/ui_preview.py thinking --shot nucleo.png
+        deja que la escena se asiente, guarda un PNG y sale. Una escena 3D
+        con particulas y post-proceso no se puede validar leyendo el QML:
+        hay que mirarla. Esto permite mirarla sin ojos humanos delante y
+        comparar dos versiones lado a lado.
+
+    python scripts/ui_preview.py idle --projected
+        fuerza el plan B en 2.5D aunque QtQuick3D este disponible.
 """
 from __future__ import annotations
 
@@ -21,6 +30,16 @@ from PySide6.QtCore import Property, QObject, QTimer, QUrl, Qt, Signal, Slot
 from PySide6.QtGui import QColor
 from PySide6.QtQuick import QQuickView
 from PySide6.QtWidgets import QApplication
+
+from core.config import load as load_config
+from desktop.sprites import PROVIDER_ID, SpriteProvider
+
+try:
+    from desktop import geometry as _geometry     # registra los tipos QML
+    GEOMETRY_OK = True
+except Exception as _exc:                          # pragma: no cover
+    GEOMETRY_OK = False
+    print(f"[preview] sin QtQuick3D: {_exc}")
 
 DEMO = """# Descargas organizadas
 
@@ -52,12 +71,15 @@ class MockBridge(QObject):
     responseChanged = Signal()
     pendingChanged = Signal()
     statusChanged = Signal()
+    modelChanged = Signal()
+    pttChanged = Signal()
     logAppended = Signal(str, str)
 
-    def __init__(self, state: str = "idle"):
+    def __init__(self, state: str = "idle", ptt: str = "pulsa F9"):
         super().__init__()
         self._state = state
         self._level = 0.0
+        self._ptt = ptt
         self._pending = ("organizar Downloads: 199 movimientos"
                          if state == "waiting" else "")
 
@@ -69,9 +91,11 @@ class MockBridge(QObject):
     pending = Property(str, lambda s: s._pending, notify=pendingChanged)
     status = Property(str, lambda s: "vista previa", notify=statusChanged)
     skill = Property(str, lambda s: "archivos · 167ms", notify=responseChanged)
+    model = Property(str, lambda s: "Opus 5", notify=modelChanged)
+    ptt = Property(str, lambda s: s._ptt, notify=pttChanged)
 
     def pulse(self) -> None:
-        """Simula el nivel de audio para ver reaccionar al orbe."""
+        """Simula el nivel de audio para ver reaccionar al nucleo."""
         import math
         import time
         self._level = abs(math.sin(time.time() * 3)) * 0.5
@@ -91,11 +115,45 @@ class MockBridge(QObject):
         print("[preview] cancelar")
 
 
-def main() -> int:
-    state = sys.argv[1] if len(sys.argv) > 1 else "idle"
-    app = QApplication([])
+def hud_config(force_projected: bool) -> dict:
+    """Mismo bloque que arma `desktop/app.py`, leido del toml de verdad."""
+    try:
+        cfg = load_config()
+        conf = {
+            "mode": str(cfg.get("desktop.core.mode", "quick3d")),
+            "nodes": int(cfg.get("desktop.core.nodes", 1400)),
+            "spokes": int(cfg.get("desktop.core.spokes", 28)),
+            "dust": int(cfg.get("desktop.core.dust", 260)),
+            "bloom": bool(cfg.get("desktop.core.bloom", True)),
+            "depth_field": bool(cfg.get("desktop.core.depth_field", True)),
+            "fov": float(cfg.get("desktop.core.fov", 42)),
+        }
+        ptt = cfg.ptt_hint()
+    except Exception:
+        conf = {"mode": "quick3d", "nodes": 1400, "spokes": 28, "dust": 260,
+                "bloom": True, "depth_field": True, "fov": 42.0}
+        ptt = "pulsa F9"
 
-    bridge = MockBridge(state)
+    if force_projected or not GEOMETRY_OK:
+        conf["mode"] = "projected"
+    return conf, ptt
+
+
+def main() -> int:
+    args = [a for a in sys.argv[1:]]
+    shot = ""
+    if "--shot" in args:
+        i = args.index("--shot")
+        shot = args[i + 1] if i + 1 < len(args) else "preview.png"
+        del args[i:i + 2]
+    projected = "--projected" in args
+    args = [a for a in args if not a.startswith("--")]
+    state = args[0] if args else "idle"
+
+    app = QApplication([])
+    conf, ptt = hud_config(projected)
+
+    bridge = MockBridge(state, ptt)
     view = QQuickView()
     view.setFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
     view.setColor(QColor(0, 0, 0, 0))
@@ -104,9 +162,11 @@ def main() -> int:
     ctx = view.rootContext()
     ctx.setContextProperty("friday", bridge)
     ctx.setContextProperty("appWindow", view)
+    ctx.setContextProperty("hudCfg", conf)
 
     qml = ROOT / "desktop" / "qml"
     view.engine().addImportPath(str(qml))
+    view.engine().addImageProvider(PROVIDER_ID, SpriteProvider())
     view.setSource(QUrl.fromLocalFile(str(qml / "Companion.qml")))
 
     if view.status() == QQuickView.Error:
@@ -125,7 +185,23 @@ def main() -> int:
         t.start(50)
         app._t = t  # evita que el recolector se lo lleve
 
-    print(f"  vista previa · estado «{state}» · Ctrl+C para salir")
+    if shot:
+        # Las particulas tardan en emitirse y el post-proceso necesita un par
+        # de cuadros: capturar de inmediato daria una esfera vacia.
+        def capture() -> None:
+            img = view.grabWindow()
+            path = Path(shot)
+            if not path.is_absolute():
+                path = Path.cwd() / path
+            ok = img.save(str(path))
+            print(f"  captura {'guardada en' if ok else 'FALLO en'} {path}")
+            app.quit()
+
+        QTimer.singleShot(2600, capture)
+        print(f"  capturando «{state}» · modo {conf['mode']}…")
+        return app.exec()
+
+    print(f"  vista previa · estado «{state}» · nucleo {conf['mode']} · Ctrl+C para salir")
     return app.exec()
 
 
