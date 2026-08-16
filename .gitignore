@@ -1,0 +1,22 @@
+.venv/
+__pycache__/
+*.pyc
+logs/*.log
+
+# Modelos de voz: pesados y se bajan solos con setup.ps1
+models/piper/*.onnx
+models/piper/*.json
+models/piper/_out.wav
+
+# ── Tu memoria es tuya ──────────────────────────────────────────
+# Este repo es publico y en vault/ caen tus transcripciones de voz,
+# tu log diario y tus planes. Se versiona la SEMILLA, no lo que captures.
+vault/raw/*
+vault/outputs/*
+vault/wiki/*
+!vault/wiki/Agenda.md
+!vault/**/.gitkeep
+
+# Estado local de Obsidian
+vault/.obsidian/workspace.json
+vault/.obsidian/workspace-mobile.json

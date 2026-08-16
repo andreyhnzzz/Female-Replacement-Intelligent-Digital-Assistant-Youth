@@ -1,0 +1,17 @@
+# F.R.I.D.A.Y OS — Python 3.12 recomendado
+# Todo corre local. Nada de esto llama a una API de terceros en ejecucion.
+
+# --- nucleo / HUD ---
+aiohttp>=3.9
+psutil>=5.9
+
+# --- voz ---
+numpy>=1.26
+sounddevice>=0.4.6        # captura y reproduccion
+pynput>=1.7.6             # push-to-talk global
+faster-whisper>=1.0.3     # STT local (CTranslate2, sin nube)
+
+# --- TTS (elige uno; el codigo cae al que exista) ---
+pyttsx3>=2.90             # SAPI5 de Windows, local, cero descargas
+piper-tts>=1.2.0          # voz neuronal local (mejor calidad)
+soundfile>=0.12           # solo si usas piper por CLI
