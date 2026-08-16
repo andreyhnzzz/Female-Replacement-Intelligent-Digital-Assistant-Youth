@@ -1,8 +1,10 @@
 """El enrutador. Yo hablo, FRIDAY decide quien trabaja.
 
-Dos caminos:
-  1. RAPIDO   — regex de las skills. Sin latencia, sin motor. Cubre el 80%.
-  2. PENSADO  — si nada gana claro, el motor clasifica y/o responde libre.
+Tres caminos, del mas barato al mas caro:
+
+  0. CONFIRMACION  hay una accion esperando un si. Nada mas importa.
+  1. RAPIDO        regex de las skills. Sin latencia, sin motor. Cubre el 80%.
+  2. PENSADO       el motor clasifica y, si no encaja en nada, responde libre.
 """
 from __future__ import annotations
 
@@ -13,20 +15,26 @@ from typing import Any
 
 from memory.graph import Graph
 from memory.vault import Vault
-from skills import Skill, SkillContext, SkillResult
+from skills import PendingAction, Skill, SkillContext, SkillResult
 
 from .config import Config
 from .engine import Engine
+from .policy import Policy
 
 FAST_THRESHOLD = 0.62
 
-# comandos literales del HUD / voz — no gastan motor
+CONFIRM = re.compile(r"^\s*(s[ií]|dale|adelante|confirmo?|confirmado|"
+                     r"hazlo|procede|correcto|ok|okay|va)\s*[.!]?\s*$", re.I)
+CANCEL = re.compile(r"^\s*(no|cancela|cancelar|olv[ií]dalo|d[eé]jalo|"
+                    r"detente|para|abortar?|mejor no|stop)\s*[.!]?\s*$", re.I)
+
+# comandos literales — no gastan motor
 DIRECT = {
-    r"^\s*(silencio|c[aá]llate|mute)\s*$": ("_mute", {}),
-    r"^\s*(escucha|unmute|habla)\s*$": ("_unmute", {}),
-    r"^\s*(repite|otra vez)\s*$": ("_repeat", {}),
-    r"^\s*(cancela|para|detente|stop)\s*$": ("_cancel", {}),
-    r"^\s*(reparar? grafo|arregla enlaces|heal)\s*$": ("_heal", {}),
+    r"^\s*(silencio|c[aá]llate|mute)\s*[.!]?\s*$": "_mute",
+    r"^\s*(escucha|unmute|habla)\s*[.!]?\s*$": "_unmute",
+    r"^\s*(repite|otra vez|de nuevo)\s*[.!]?\s*$": "_repeat",
+    r"^\s*(reparar? (el )?grafo|arregla (los )?enlaces|heal)\s*[.!]?\s*$": "_heal",
+    r"^\s*(qu[eé] puedes hacer|ayuda|capacidades)\s*[.!?]?\s*$": "_help",
 }
 
 
@@ -34,24 +42,44 @@ DIRECT = {
 class Route:
     skill: str
     confidence: float
-    how: str              # fast | engine | fallback | direct
+    how: str              # fast | engine | fallback | direct | confirm
     scores: dict[str, float]
 
 
 class Router:
-    def __init__(self, cfg: Config, vault: Vault, graph: Graph,
-                 engine: Engine, skills: dict[str, Skill]):
+    def __init__(self, cfg: Config, vault: Vault, graph: Graph, engine: Engine,
+                 skills: dict[str, Skill], system: Any = None,
+                 policy: Policy | None = None):
         self.cfg = cfg
         self.vault = vault
         self.graph = graph
         self.engine = engine
         self.skills = skills
+        self.system = system
+        self.policy = policy
         self.last_result: SkillResult | None = None
+        self.pending: PendingAction | None = None
 
-    # -- decidir ------------------------------------------------------
+    # ── contexto ──────────────────────────────────────────────────
+    def _ctx(self, text: str = "") -> SkillContext:
+        return SkillContext(cfg=self.cfg, vault=self.vault, graph=self.graph,
+                            engine=self.engine, text=text,
+                            system=self.system, policy=self.policy)
+
+    # ── decidir ───────────────────────────────────────────────────
     async def decide(self, text: str) -> Route:
         clean = text.strip()
-        for pat, (name, _) in DIRECT.items():
+
+        # 0. una accion espera confirmacion: tiene prioridad sobre todo
+        if self.pending is not None:
+            if self.pending.expired:
+                self.pending = None
+            elif CONFIRM.match(clean):
+                return Route("_confirm", 1.0, "confirm", {})
+            elif CANCEL.match(clean):
+                return Route("_cancel_pending", 1.0, "confirm", {})
+
+        for pat, name in DIRECT.items():
             if re.match(pat, clean, re.I):
                 return Route(name, 1.0, "direct", {})
 
@@ -60,7 +88,6 @@ class Router:
         if best and scores[best] >= FAST_THRESHOLD:
             return Route(best, scores[best], "fast", scores)
 
-        # camino pensado: que el motor elija
         catalog = "\n".join(f"- {n}: {s.description}" for n, s in self.skills.items())
         prompt = (
             f"Enruta esta peticion de voz a UNA skill.\n\nPETICION: \"{clean}\"\n\n"
@@ -71,13 +98,11 @@ class Router:
             data = self.engine.extract_json(await self.engine.complete(prompt)) or {}
             name = str(data.get("skill", "none")).strip()
             conf = float(data.get("confidence", 0.5))
-            if name in self.skills:
-                return Route(name, conf, "engine", scores)
-            return Route("none", conf, "engine", scores)
+            return Route(name if name in self.skills else "none", conf, "engine", scores)
         except Exception:
             return Route(best or "none", scores.get(best, 0.0), "fallback", scores)
 
-    # -- ejecutar -----------------------------------------------------
+    # ── ejecutar ──────────────────────────────────────────────────
     async def dispatch(self, text: str, route: Route | None = None) -> tuple[Route, SkillResult]:
         route = route or await self.decide(text)
         t0 = time.time()
@@ -85,8 +110,7 @@ class Router:
         if route.skill.startswith("_"):
             res = await self._builtin(route.skill)
         elif route.skill in self.skills:
-            ctx = SkillContext(cfg=self.cfg, vault=self.vault, graph=self.graph,
-                               engine=self.engine, text=text)
+            ctx = self._ctx(text)
             try:
                 res = await self.skills[route.skill].run(ctx)
             except Exception as exc:
@@ -96,14 +120,20 @@ class Router:
         else:
             res = await self._freeform(text)
 
+        # una skill que devuelve accion pendiente la deja armada aqui
+        if res.pending is not None:
+            self.pending = res.pending
+
         res.data["_ms"] = int((time.time() - t0) * 1000)
         res.data["_route"] = {"skill": route.skill, "how": route.how,
                               "confidence": route.confidence}
+        res.data["_pending"] = self.pending.describe if self.pending else ""
+
         if res.ok and not route.skill.startswith("_"):
             self.last_result = res
         return route, res
 
-    # -- conversacion libre -------------------------------------------
+    # ── conversacion libre ────────────────────────────────────────
     async def _freeform(self, text: str) -> SkillResult:
         hits = self.vault.search(text, limit=3)
         ctxt = self.graph.context_for([h.title for h in hits], depth=1, max_chars=3500) \
@@ -112,7 +142,7 @@ class Router:
             (f"CONTEXTO DEL VAULT:\n{ctxt}\n\n" if ctxt else "") +
             f"El usuario dice: \"{text}\"\n\n"
             "Responde breve. Devuelve SOLO este JSON:\n"
-            '{"speak": "1-2 frases para decir en voz alta", "display": "markdown para el HUD"}'
+            '{"speak": "1-2 frases para decir en voz alta", "display": "markdown para el panel"}'
         )
         try:
             raw = await self.engine.complete(prompt, system=self.cfg.persona())
@@ -129,11 +159,32 @@ class Router:
                                speak="El motor no responde.",
                                display=f"# Motor caido\n\n```\n{exc}\n```")
 
-    # -- comandos internos --------------------------------------------
+    # ── comandos internos ─────────────────────────────────────────
     async def _builtin(self, name: str) -> SkillResult:
+        if name == "_confirm":
+            action = self.pending
+            self.pending = None
+            if action is None or action.expired:
+                return SkillResult(speak="Ya no hay nada pendiente.",
+                                   display="# Nada pendiente")
+            try:
+                return action.run()
+            except Exception as exc:
+                return SkillResult(ok=False, error=str(exc),
+                                   speak="Fallo al aplicar.",
+                                   display=f"# Fallo\n\n```\n{exc}\n```")
+
+        if name == "_cancel_pending":
+            desc = self.pending.describe if self.pending else ""
+            self.pending = None
+            return SkillResult(
+                speak="Cancelado." if desc else "No habia nada pendiente.",
+                display=f"# Cancelado\n\n~~{desc}~~" if desc else "# Nada pendiente")
+
         if name == "_repeat":
-            last = self.last_result
-            return last or SkillResult(speak="No hay nada que repetir.", display="—")
+            return self.last_result or SkillResult(speak="No hay nada que repetir.",
+                                                   display="—")
+
         if name == "_heal":
             created = self.graph.heal()
             return SkillResult(
@@ -142,6 +193,19 @@ class Router:
                 display="# Reparacion del grafo\n\n" +
                         ("\n".join(f"- [[{c}]]" for c in created) or "Nada roto."),
                 data={"created": created}, writes=created)
+
+        if name == "_help":
+            lines = ["# Capacidades", ""]
+            for s in self.skills.values():
+                falta = ""
+                if s.needs and self.system is not None:
+                    missing = [n for n in s.needs if getattr(self.system, n, None) is None]
+                    falta = f"  _(sin {', '.join(missing)})_" if missing else ""
+                lines.append(f"- **{s.name}** — {s.description}{falta}")
+            return SkillResult(speak=f"{len(self.skills)} capacidades activas.",
+                               display="\n".join(lines),
+                               data={"skills": list(self.skills)})
+
         return SkillResult(speak="", display="", data={"command": name})
 
     def catalog(self) -> list[dict[str, Any]]:
