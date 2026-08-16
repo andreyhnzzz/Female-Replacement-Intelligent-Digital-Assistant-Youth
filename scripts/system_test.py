@@ -332,6 +332,40 @@ async def main() -> int:
     check("la pista de tecla sale de la config",
           real_cfg0.ptt_hint() == "pulsa F9", real_cfg0.ptt_hint())
 
+    # ══════════════════ VOZ DE SALIDA ══════════════════
+    # SAPI5 es COM con afinidad de apartamento: construirlo en un hilo y
+    # usarlo en otro cuelga runAndWait() para el resto de la sesion. Fue un
+    # fallo real y silencioso — la voz simplemente dejaba de salir. Estas
+    # pruebas fijan la invariante sin llegar a hablar.
+    print("\n  ── voz de salida ──")
+    from voice.tts import LocalTTS
+
+    habla = LocalTTS(real_cfg0)
+    habla.load()
+    check("load() detecta backend sin construir la voz",
+          habla.backend in ("piper", "piper-cli", "sapi5", "none")
+          and habla._sapi is None,
+          f"backend={habla.backend}, objeto COM={habla._sapi!r}")
+
+    # shutup() lo llama el hilo de asyncio; si tocara COM, reventaria.
+    habla.say("esto no se llega a decir")
+    habla.shutup()
+    check("shutup() no toca COM ni deja cola",
+          habla._q.empty() and habla._cut.is_set())
+
+    check("wait_until_idle responde con la cola vacia",
+          habla.wait_until_idle(timeout=1.0))
+
+    mudo = LocalTTS(real_cfg0)
+    mudo.muted = True
+    mudo.say("silenciada")
+    check("mute no encola nada", mudo._q.empty())
+
+    check("markdown no se pronuncia",
+          LocalTTS.clean("## Titulo\n- **dato** con [[Nota|alias]] y `code`")
+          == "Titulo dato con alias y code",
+          LocalTTS.clean("## Titulo\n- **dato** con [[Nota|alias]] y `code`"))
+
     # ══════════════════ SKILLS Y CONFIRMACION ══════════════════
     print("\n  ── skills de sistema ──")
     real_cfg = load_config(ROOT / "config" / "friday.toml")

@@ -129,6 +129,11 @@ class Friday:
             if res.speak and self.tts:
                 await self.bus.emit("tts.speaking", backend=self.tts.backend)
                 self.tts.say(res.speak)
+                # Esperar a que la voz TERMINE, no solo a encolarla: si no, el
+                # HUD pasa por «hablando» en un parpadeo y vuelve a reposo
+                # mientras FRIDAY sigue hablando. La espera va en un hilo
+                # aparte para no bloquear el bucle de eventos.
+                await asyncio.to_thread(self.tts.wait_until_idle, 120.0)
                 await self.bus.emit("tts.done")
 
             if self.args.console or self.args.say:
