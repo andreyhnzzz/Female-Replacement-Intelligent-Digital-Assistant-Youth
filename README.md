@@ -501,9 +501,16 @@ El HUD se revisa mirándolo, no leyéndolo:
 ## 🧭 Qué falta
 
 Lo pendiente, lo decidido a conciencia y lo de algún día está en
-**[ROADMAP.md](ROADMAP.md)**. Lo más inmediato: controles de Bluetooth, wifi y
-brillo, y que cuando no sepa hacer algo lo diga por su nombre en vez de un
-genérico *"no me quedó claro"*.
+**[ROADMAP.md](ROADMAP.md)**. Lo más inmediato:
+
+- **Encargarle trabajo a Claude Code por voz** — *"métete en mi-proyecto y
+  revisa por qué fallan los tests"*. El modo agéntico del motor ya existe;
+  falta quien lo llame, y las barreras para que un STT que se equivoca no
+  suelte un agente con permiso de escritura en el sitio equivocado.
+- **Juegos de Steam y apps de Microsoft Store** — Brave y el cliente de Steam
+  ya se abren; los juegos y las apps empaquetadas no aparecen en el catálogo.
+- **Bluetooth, wifi y brillo**, y que cuando no sepa hacer algo lo diga por su
+  nombre en vez de un genérico *"no me quedó claro"*.
 
 ---
 
