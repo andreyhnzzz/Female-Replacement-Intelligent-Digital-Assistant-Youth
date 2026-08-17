@@ -26,7 +26,9 @@ def build_system_access(cfg: Any, policy: Policy) -> SystemAccess:
     index = LocalFileIndex(policy, max_scan=int(cfg.get("system.max_scan", 40000)))
     access.files = index
     access.organizer = LocalFileOrganizer(policy, index)
-    access.web = BrowserWebOpener(policy, cfg.get("system.search_engine", "default"))
+
+    # El navegador se cablea despues de la parte especifica de plataforma,
+    # porque quiere el puerto de predeterminados si existe. Ver el final.
 
     # ── red saliente ──────────────────────────────────────────────
     # Se construyen siempre, pero cada peticion pasa por `can_fetch`: con
@@ -52,13 +54,31 @@ def build_system_access(cfg: Any, policy: Policy) -> SystemAccess:
     if sys.platform == "win32":
         _wire_windows(cfg, policy, access)
 
+    # El navegador va al final: en Windows ya existe el puerto de
+    # predeterminados y puede abrir con el que el usuario eligio. Fuera de
+    # Windows queda en None y `webbrowser` hace lo mismo a ciegas.
+    access.web = BrowserWebOpener(policy,
+                                  cfg.get("system.search_engine", "default"),
+                                  defaults=access.defaults)
+
     return access
 
 
 def _wire_windows(cfg: Any, policy: Policy, access: SystemAccess) -> None:
     try:
+        from system.win32.defaults import build_default_apps
+        access.defaults = build_default_apps(cfg)
+    except ImportError:
+        pass
+
+    try:
         from system.win32.apps import WindowsAppCatalog, WindowsAppLauncher
-        access.apps = WindowsAppCatalog(ttl_s=float(cfg.get("system.app_cache_s", 120)))
+        access.apps = WindowsAppCatalog(
+            ttl_s=float(cfg.get("system.app_cache_s", 600)),
+            aliases=dict(cfg.get("system.app_aliases", {}) or {}),
+            include_store=bool(cfg.get("system.index_store_apps", True)),
+            include_steam=bool(cfg.get("system.index_steam", True)),
+        )
         access.launcher = WindowsAppLauncher(policy)
     except ImportError:
         pass

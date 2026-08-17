@@ -104,6 +104,15 @@ async def main() -> int:
     check("busqueda", any("Beta" in h.title for h in hits),
           ", ".join(h.title for h in hits[:3]))
 
+    # Las palabras vacias no pueden traer notas. Con «que» y «los» puntuando,
+    # cualquier pregunta coincidia con cualquier nota — y esas notas se
+    # inyectan como contexto en la conversacion libre. Un modelo grande
+    # ignora el ruido; uno pequeño responde sobre la nota equivocada.
+    check("las palabras vacias no traen notas", vault.search("que es esto") == [],
+          f"{len(vault.search('que es esto'))} notas por «que es esto»")
+    check("y no rompen una busqueda con contenido",
+          any("Beta" in h.title for h in vault.search("que es el proyecto alcance")))
+
     # ── seguridad de rutas ───────────────────────────────────
     try:
         vault.write("../../fuera.md", "no")
@@ -139,11 +148,118 @@ async def main() -> int:
         "busca el archivo presupuesto": "archivos",
 
         "que tengo abierto": "sistema",
+
+        # taller vs el resto: encargarle trabajo a un agente en un repo
+        "metete en mi-proyecto y revisa por que fallan los tests": "taller",
     }
     for text, expected in cases.items():
         r = await router.decide(text)
         check(f"ruta «{text[:34]}»", r.skill == expected,
               f"-> {r.skill} ({r.how}, {r.confidence})")
+
+    # ── configuracion publica vs local ───────────────────────
+    # Este repo es publico y su toml es a la vez ejemplo y config viva. La
+    # separacion no es comodidad: es lo que evita que las rutas de tus
+    # proyectos acaben en un commit.
+    import tomllib
+
+    from core.config import Config, _merge
+
+    with open(ROOT / "config" / "friday.toml", "rb") as fh:
+        publico = tomllib.load(fh)
+    check("el toml publico no declara ninguna raiz de agente",
+          publico.get("policy", {}).get("agent_roots") == [],
+          f"{publico.get('policy', {}).get('agent_roots')}")
+
+    fusion = _merge({"policy": {"agent_roots": [], "allow_agent": True},
+                     "system": {"search_engine": "default"}},
+                    {"policy": {"agent_roots": ["~/proyectos"]}})
+    check("lo local pisa solo lo que menciona",
+          fusion["policy"]["agent_roots"] == ["~/proyectos"]
+          and fusion["policy"]["allow_agent"] is True
+          and fusion["system"]["search_engine"] == "default",
+          str(fusion))
+    check("una lista se reemplaza entera, no se concatena",
+          _merge({"a": [1, 2]}, {"a": [3]})["a"] == [3],
+          "si declaras tus raices, quieres ESAS")
+    check("el archivo local se busca junto al publico",
+          Config(ROOT / "config" / "friday.toml").local_path.name
+          == "friday.local.toml")
+
+    # ── el hilo de conversacion ──────────────────────────────
+    # Lo que se prueba aqui es que una frase que NO se sostiene sola acabe
+    # en conversacion y no en una skill. «y eso cuanto cuesta» dispara el
+    # `\bcuanto\b` de `metricas`: sin el paso de seguimiento, preguntar por
+    # un precio te devuelve el uso de CPU.
+    import time
+
+    from core.chat import Conversation, Turn
+
+    hilo = Conversation(max_turns=4, max_chars=4000, ttl_s=900)
+    hilo.add("user", "cuanto cuesta una TPU")
+    hilo.add("assistant", "Depende del modelo.")
+    check("el hilo guarda los turnos", len(hilo) == 2)
+    check("la transcripcion usa etiquetas habladas, no roles de API",
+          "Jefe: cuanto cuesta una TPU" in hilo.transcript(),
+          hilo.transcript()[:40])
+    for i in range(6):
+        hilo.add("user", f"linea {i}")
+    check("el hilo recorta por numero de turnos", len(hilo) == 4, f"{len(hilo)} turnos")
+
+    gordo = Conversation(max_turns=10, max_chars=50)
+    gordo.add("user", "x" * 40)
+    gordo.add("assistant", "y" * 40)
+    check("el tope de caracteres tira lo mas viejo",
+          len(gordo) == 1 and gordo.turns[0].text.startswith("y"),
+          f"{len(gordo)} turnos")
+
+    frio = Conversation(ttl_s=600)
+    frio.turns.append(Turn("user", "algo dicho hace una hora", time.time() - 3600))
+    check("un hilo frio no aporta contexto", not frio.active and frio.transcript() == "",
+          "un «y eso?» media hora despues no es una continuacion")
+
+    router.chat.clear()
+    router.chat.add("user", "cuanto cuesta una TPU")
+    router.chat.add("assistant", "Depende del modelo.")
+
+    r = await router.decide("y eso cuanto cuesta")
+    check("seguimiento: la anafora le gana al enrutado rapido",
+          r.skill == "none" and r.how == "chat", f"-> {r.skill} ({r.how})")
+    r = await router.decide("explicame mas")
+    check("seguimiento: «explicame mas» continua el hilo", r.how == "chat", r.how)
+    r = await router.decide("y abre spotify")
+    check("una orden NO es seguimiento aunque empiece por «y»",
+          r.how != "chat", f"-> {r.skill} ({r.how})")
+    r = await router.decide("abre eso")
+    check("«abre eso» lleva anafora pero es una orden",
+          r.skill == "sistema", f"-> {r.skill} ({r.how})")
+
+    router.chat.clear()
+    r = await router.decide("y eso cuanto cuesta")
+    check("sin hilo vivo no hay seguimiento", r.how != "chat", f"-> {r.skill} ({r.how})")
+
+    # la conversacion libre responde en prosa: pedir JSON aqui encoge las
+    # respuestas y, con un 8B local, cada tanto rompe el formato
+    res = await router._freeform("y eso que significa")
+    check("conversacion libre responde en prosa",
+          res.ok and res.speak and not res.speak.strip().startswith("{"),
+          res.speak[:50])
+
+    largo = " ".join(f"Frase numero {i}." for i in range(80))
+    dicho = router._for_voice(largo)
+    check("la voz corta por frases enteras, no a media palabra",
+          dicho.endswith(".") and len(dicho) <= 700, f"{len(dicho)} caracteres")
+
+    router.chat.clear()
+    await router.dispatch("dame las metricas")
+    check("el hilo recoge tambien lo que atendio una skill",
+          len(router.chat) == 2, f"{len(router.chat)} turnos")
+
+    route = await router.decide("cambiemos de tema")
+    check("«cambiemos de tema» es comando directo", route.skill == "_reset_chat",
+          route.how)
+    await router.dispatch("cambiemos de tema", route)
+    check("reiniciar el hilo lo vacia", len(router.chat) == 0)
 
     # ── skills de verdad ─────────────────────────────────────
     ctx = SkillContext(cfg, vault, graph, engine)

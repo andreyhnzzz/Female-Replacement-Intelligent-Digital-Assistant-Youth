@@ -3,14 +3,21 @@
 FRIDAY no navega ni raspa paginas: abre el navegador del usuario y le deja
 el control. Menos codigo, menos formas de equivocarse, y la sesion y las
 cookies siguen siendo del usuario.
+
+**Cual** navegador no se elige aqui: se lee de las aplicaciones
+predeterminadas del sistema (`DefaultApps`). Si esa lectura no esta
+disponible, `webbrowser` hace lo mismo a ciegas. La diferencia es que con
+el puerto FRIDAY sabe el nombre y puede decirlo en voz alta.
 """
 from __future__ import annotations
 
 import re
+import subprocess
 import webbrowser
 from urllib.parse import quote_plus
 
 from core.policy import Policy
+from system.ports import DefaultApps
 
 ENGINES: dict[str, str] = {
     "default": "https://duckduckgo.com/?q={q}",
@@ -73,10 +80,31 @@ def resolve_site(name: str) -> str:
 class BrowserWebOpener:
     """Implementa `WebOpener`."""
 
-    def __init__(self, policy: Policy, default_engine: str = "default"):
+    def __init__(self, policy: Policy, default_engine: str = "default",
+                 defaults: DefaultApps | None = None):
         self.policy = policy
         self.default_engine = default_engine if default_engine in ENGINES else "default"
+        self.defaults = defaults
         self.last_error = ""
+
+    # ── quien abre ────────────────────────────────────────────────
+    @property
+    def browser_name(self) -> str:
+        """Como se llama el navegador que va a recibir la URL.
+
+        Cadena vacia si no se pudo averiguar: quien lo use debe decir «el
+        navegador», no inventarse una marca.
+        """
+        app = self._default_browser()
+        return app.name if app else ""
+
+    def _default_browser(self):
+        if self.defaults is None:
+            return None
+        try:
+            return self.defaults.browser()
+        except Exception:            # el registro no puede tumbar una busqueda
+            return None
 
     def open_site(self, name: str) -> str:
         """Abre un sitio conocido por su nombre. Devuelve la URL, o vacio."""
@@ -101,8 +129,27 @@ class BrowserWebOpener:
             self.last_error = "solo se abren URLs http/https"
             return False
         self.last_error = ""
+
+        # 1. el navegador que el usuario marco como predeterminado, por su
+        #    ejecutable: sin intermediarios y sin la variable BROWSER de por
+        #    medio, que puede apuntar a algo que nunca eligio.
+        app = self._default_browser()
+        if app is not None and app.launchable:
+            try:
+                subprocess.Popen([app.path, url], shell=False,
+                                 stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
+                return True
+            except OSError as exc:
+                self.last_error = str(exc)[:140]   # y se cae al plan B
+
+        # 2. plan B multiplataforma: el shell resuelve el predeterminado.
         try:
-            return bool(webbrowser.open(url))
+            if webbrowser.open(url):
+                self.last_error = ""
+                return True
+            self.last_error = self.last_error or "el navegador no acepto la URL"
+            return False
         except Exception as exc:
             self.last_error = str(exc)[:140]
             return False

@@ -14,6 +14,7 @@ from .ordenador import OrdenadorSkill
 from .pantalla import PantallaSkill
 from .plan import PlanSkill
 from .sistema import SistemaSkill
+from .taller import TallerSkill
 from .vault import VaultSkill
 from .web import WebSkill
 
@@ -32,6 +33,7 @@ ALL_SKILLS: dict[str, type[Skill]] = {
     "archivos": ArchivosSkill,
     "pantalla": PantallaSkill,
     "ordenador": OrdenadorSkill,
+    "taller": TallerSkill,
     # el mundo de fuera
     "noticias": NoticiasSkill,
     "web": WebSkill,

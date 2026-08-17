@@ -11,6 +11,7 @@ import asyncio
 import shutil
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -80,6 +81,93 @@ def seed(sandbox: Path) -> None:
         (sandbox / name).write_text("x" * 32, encoding="utf-8")
 
 
+def pruebas_windows(sandbox: Path) -> None:
+    """Catalogo de aplicaciones y apps predeterminadas.
+
+    Vive aparte porque `winreg` solo existe en Windows: el resto de la
+    suite es multiplataforma y tiene que poder correr igual.
+    """
+    print("\n  ── catalogo de aplicaciones ──")
+    from system.ports import AppInfo, DefaultApp
+    from system.web import BrowserWebOpener
+    from system.win32.apps import (_STEAM_NOISE, WindowsAppCatalog,
+                                   _merge_aliases, _score, steam_libraries)
+    from system.win32.defaults import _exe_from_command, _pretty
+
+    check("un alias del toml admite texto suelto o lista",
+          _merge_aliases({"mapa": "google maps",
+                          "hoja": ["microsoft excel"]})["mapa"]
+          == ("google maps",))
+    check("los alias del codigo siguen ahi",
+          "code" in _merge_aliases(None)["vscode"],
+          "«abre vscode» no puede depender de que exista un .lnk")
+
+    # Incidente del 17/08/2026: «Descríbete a ti misma en dos palabras» se
+    # enruto a `sistema` y FRIDAY lanzo el changelog de WinRAR. Las dos
+    # frases solo comparten la palabra «en», y eso puntuaba 0.45.
+    check("una palabra vacia compartida no empareja dos frases ajenas",
+          _score("Describete a ti misma en dos palabras",
+                 "Que hay de nuevo en la ultima version") == 0.0,
+          f"{_score('Describete a ti misma en dos palabras', 'Que hay de nuevo en la ultima version')}")
+    check("y las coincidencias de verdad siguen valiendo",
+          _score("discord", "Discord") == 1.0
+          and _score("visual studio code", "Visual Studio Code 2022") == 0.9
+          and _score("geometry dash", "Geometry Dash") == 1.0)
+
+    check("los redistribuibles de Steam no son juegos",
+          bool(_STEAM_NOISE.search("Steamworks Common Redistributables"))
+          and not _STEAM_NOISE.search("Geometry Dash"))
+
+    # Varias bibliotecas: quien tiene un SSD chico reparte los juegos, y
+    # asumir una sola carpeta deja fuera justo los pesados.
+    otra = sandbox / "OtroDisco"
+    (otra / "steamapps").mkdir(parents=True)
+    (sandbox / "steamapps").mkdir()
+    (sandbox / "steamapps" / "libraryfolders.vdf").write_text(
+        '"libraryfolders"\n{\n "0"\n {\n  "path" "'
+        + str(otra).replace("\\", "\\\\") + '"\n }\n}\n', encoding="utf-8")
+    libs = steam_libraries(sandbox)
+    check("lee todas las bibliotecas de Steam, no solo la primera",
+          len(libs) == 2 and (otra / "steamapps") in libs,
+          f"{[str(p) for p in libs]}")
+
+    cat = WindowsAppCatalog(ttl_s=999, aliases={"cs": ["counter-strike 2"]},
+                            include_store=False, include_steam=False)
+    cat._apps = [AppInfo("Counter-Strike 2", "steam://rungameid/730", "uri"),
+                 AppInfo("Calculadora", "calc.exe", "exe")]
+    cat._built = time.time()
+    hits_cs = cat.find("cs")
+    check("un alias hablado encuentra el juego",
+          bool(hits_cs) and hits_cs[0].name == "Counter-Strike 2",
+          str([h.name for h in hits_cs]))
+    check("un juego se lanza por URI, no por ejecutable",
+          bool(hits_cs) and hits_cs[0].target.startswith("steam://"),
+          hits_cs[0].target if hits_cs else "—")
+
+    # ── navegador predeterminado ──
+    print("\n  ── navegador predeterminado ──")
+    check("saca el ejecutable de la linea de comando del registro",
+          _exe_from_command(f'"{sys.executable}" --single-argument %1')
+          == sys.executable)
+    check("un ProgId no se dice en voz alta",
+          _pretty(r"C:\x\brave.exe", "BraveHTML") == "Brave",
+          "«BraveHTML» es un identificador, no un nombre")
+    check("sin ejecutable resuelto no se inventa una ruta",
+          _exe_from_command("no-existe-esto.exe %1") == "")
+
+    class _DefsFalsos:
+        def browser(self): return DefaultApp(name="Brave", progid="BraveHTML")
+        def for_scheme(self, s): return self.browser()
+
+    opener = BrowserWebOpener(Policy(FakeCfg(sandbox, allow_web=False)),
+                              "google", defaults=_DefsFalsos())
+    check("FRIDAY sabe COMO SE LLAMA el navegador predeterminado",
+          opener.browser_name == "Brave", opener.browser_name)
+    check("sin permiso no se abre ninguna busqueda",
+          opener.search("gatos") == "" and "deshabilitado" in opener.last_error,
+          opener.last_error)
+
+
 async def main() -> int:
     sandbox = Path(tempfile.mkdtemp(prefix="friday_sys_"))
     print(f"\n  F.R.I.D.A.Y — pruebas de sistema\n  sandbox: {sandbox}\n")
@@ -123,6 +211,26 @@ async def main() -> int:
     check("allow_web_fetch=false lo apaga todo",
           not Policy(FakeCfg(sandbox, allow_web_fetch=False))
           .can_fetch("https://ejemplo.com").allowed)
+
+    # ── delegar en un agente: el permiso mas fuerte del sistema ──
+    # Un agente con permiso de escritura dirigido por un STT que se
+    # equivoca. La lista blanca no es un filtro: es de donde salen las
+    # opciones, y vacia significa que la capacidad no alcanza nada.
+    agente = Policy(FakeCfg(sandbox, agent_roots=[str(sandbox)]))
+    check("delega dentro de la raiz declarada",
+          agente.can_delegate(sandbox / "proyecto").allowed)
+    check("una tarea que escribe se confirma antes de lanzar",
+          agente.can_delegate(sandbox, writes=True).verdict is Verdict.CONFIRM,
+          agente.can_delegate(sandbox, writes=True).reason)
+    check("fuera de agent_roots no se delega",
+          not agente.can_delegate(Path.home()).allowed,
+          agente.can_delegate(Path.home()).reason)
+    check("sin agent_roots la capacidad esta apagada entera",
+          not policy.can_delegate(sandbox).allowed,
+          "poder escribir en Documentos no es poder refactorizar ahi")
+    check("allow_agent=false lo apaga aunque haya raices",
+          not Policy(FakeCfg(sandbox, allow_agent=False,
+                             agent_roots=[str(sandbox)])).can_delegate(sandbox).allowed)
 
     # ══════════════════ INDICE (solo lectura) ══════════════════
     print("\n  ── indice de archivos ──")
@@ -290,6 +398,172 @@ async def main() -> int:
     again_ok, again_why = await switch.switch(target)
     check("cambiar al mismo no es un error", again_ok, again_why)
 
+    # ══════════════════ EL TALLER ══════════════════
+    # Encargarle trabajo a un agente hablando. Lo que se prueba es el
+    # guardia y el reconocimiento, no el agente: elegir mal la carpeta o
+    # confundir «revisa» con «arregla» es lo que cuesta una tarde.
+    print("\n  ── taller ──")
+    from skills.taller import TallerSkill
+
+    taller = TallerSkill(real_cfg0)
+    proyectos = [("api", Path("x/api")), ("api_clientes", Path("x/api_clientes"))]
+
+    check("gana el nombre de proyecto mas largo",
+          taller._elegir("metete en api_clientes y revisa", proyectos)[0]
+          == "api_clientes",
+          "con `api` y `api_clientes` en disco, el corto no puede robar")
+    check("el STT separa los guiones y aun asi acierta",
+          taller._elegir("metete en api clientes y revisa los tests",
+                         proyectos)[0] == "api_clientes")
+    check("sin proyecto nombrado no se elige ninguno",
+          taller._elegir("revisa por que fallan los tests", proyectos) is None,
+          "preguntar es mejor que abrir un repo al azar")
+    check("dos carpetas que responden igual de bien no eligen ninguna",
+          taller._elegir("metete en api y arregla algo",
+                         [("api", Path("x/uno/api")), ("api", Path("x/dos/api"))])
+          is None,
+          "preguntar cuesta una frase; equivocarse de repo cuesta una tarde")
+
+    check("la tarea queda limpia de «metete en X y»",
+          taller._tarea("metete en api_clientes y revisa por que fallan los tests",
+                        "api_clientes") == "revisa por que fallan los tests",
+          taller._tarea("metete en api_clientes y revisa por que fallan los tests",
+                        "api_clientes"))
+
+    check("revisar no escribe", not taller._escribe("revisa por que fallan los tests"))
+    check("arreglar escribe", taller._escribe("arregla los tests"))
+    check("«revisa y arregla» escribe: gana el verbo mas peligroso",
+          taller._escribe("revisa y arregla los tests"))
+    check("una tarea que no se reconoce se trata como escritura",
+          taller._escribe("haz lo tuyo ahi"),
+          "no entender la intencion no es razon para asumir la version inofensiva")
+
+    check("el resumen hablado sale de la ultima linea",
+          taller._resumen("mucho texto\nRESUMEN: dos tests rotos, ya los nombre")
+          == "dos tests rotos, ya los nombre")
+
+    # Sin `agent_roots` la skill no ofrece nada, y lo dice en vez de fallar.
+    class MotorAgentico(FakeEngine):
+        agentic_capable = True
+
+    ctx_t = SkillContext(real_cfg0, None, None, MotorAgentico(real_cfg0),
+                         text="metete en lo que sea y arregla algo",
+                         system=None, policy=policy)
+    res_t = await taller.run(ctx_t)
+    check("sin directorios declarados no hay nada que tocar",
+          not res_t.ok and "directorio" in res_t.speak.lower(), res_t.speak[:60])
+
+    # El encargo NO bloquea el turno: contesta «voy con ello» y el
+    # resultado vuelve por el bus cuando el agente termina. Si esto se
+    # rompe, FRIDAY se queda muda los minutos que dure el trabajo.
+    from core.bus import BUS
+
+    proyecto = sandbox / "proyecto_demo"
+    proyecto.mkdir(exist_ok=True)
+    pol_taller = Policy(FakeCfg(sandbox, agent_roots=[str(sandbox)]))
+
+    class MotorTrabajador(FakeEngine):
+        agentic_capable = True
+
+        def __init__(self, cfg):
+            super().__init__(cfg)
+            self.kw: dict = {}
+
+        async def complete(self, prompt, system="", **kw):
+            self.kw = kw
+            return "mire los tests\nRESUMEN: fallan dos por una ruta fija"
+
+    dichos: list[dict] = []
+
+    async def _oye(ev):
+        dichos.append(ev.data)
+
+    BUS.on("core.say", _oye)
+    motor_t = MotorTrabajador(real_cfg0)
+
+    res_lee = await taller.run(SkillContext(
+        real_cfg0, None, None, motor_t, policy=pol_taller,
+        text="metete en proyecto_demo y revisa por que fallan los tests"))
+    check("una tarea de lectura arranca sin confirmar",
+          res_lee.ok and res_lee.pending is None and res_lee.data.get("async"),
+          res_lee.speak[:60])
+    check("contesta antes de terminar el trabajo",
+          "voy con ello" in res_lee.speak.lower(), res_lee.speak[:40])
+
+    await asyncio.sleep(0.2)                 # dejar correr la tarea de fondo
+    check("el resultado vuelve por el bus cuando acaba",
+          bool(dichos) and "fallan dos" in dichos[-1].get("text", ""),
+          dichos[-1].get("text", "")[:60] if dichos else "no llego nada")
+    check("un encargo de lectura no lleva herramientas de escritura",
+          "Write" not in motor_t.kw.get("tools", []),
+          str(motor_t.kw.get("tools")))
+    check("el agente corre en el directorio del proyecto",
+          motor_t.kw.get("cwd") == str(proyecto), str(motor_t.kw.get("cwd")))
+
+    res_esc = await taller.run(SkillContext(
+        real_cfg0, None, None, motor_t, policy=pol_taller,
+        text="metete en proyecto_demo y arregla los tests"))
+    check("una tarea que escribe espera un «si» hablado",
+          res_esc.pending is not None and res_esc.data.get("writes"),
+          res_esc.speak[:70])
+    check("la confirmacion repite QUE y DONDE",
+          "proyecto_demo" in res_esc.pending.describe
+          and "arregla" in res_esc.pending.describe,
+          res_esc.pending.describe)
+
+    res_esc.pending.run()
+    await asyncio.sleep(0.2)
+    check("solo tras confirmar recibe herramientas de escritura",
+          "Write" in motor_t.kw.get("tools", []), str(motor_t.kw.get("tools")))
+
+    # ── el motor agentico: cwd por llamada y permisos clavados ──
+    # `bypassPermissions` no se acepta ni pidiendolo por config. Se
+    # comprueba sobre el argv real, sin llegar a levantar Node.
+    from core.engine import ClaudeCodeEngine
+
+    capturado: dict[str, object] = {}
+
+    class _ProcFalso:
+        returncode = 0
+        async def communicate(self, input=None):        # noqa: A002
+            return b'{"result":"hecho"}', b""
+        def kill(self): pass
+
+    async def _exec_falso(*argv, **kw):
+        capturado["argv"] = list(argv)
+        capturado["cwd"] = kw.get("cwd")
+        return _ProcFalso()
+
+    cc = ClaudeCodeEngine(real_cfg0)
+    cc._resolve_binary = lambda: ["claude"]
+    original_exec = asyncio.create_subprocess_exec
+    asyncio.create_subprocess_exec = _exec_falso
+    try:
+        salida = await cc.complete("haz algo", agentic=True, cwd=str(sandbox),
+                                   permission_mode="bypassPermissions",
+                                   tools=["Read", "Grep"], timeout=5)
+    finally:
+        asyncio.create_subprocess_exec = original_exec
+
+    argv = capturado.get("argv", [])
+    check("el motor agentico corre en el directorio de la llamada",
+          capturado.get("cwd") == str(sandbox), str(capturado.get("cwd")))
+    check("bypassPermissions no se acepta ni pidiendolo",
+          "bypassPermissions" not in argv and "acceptEdits" in argv,
+          "si una tarea lo necesita, la haces tu en la terminal")
+    check("las herramientas van por llamada, no por constructor",
+          "Read,Grep" in argv, str([a for a in argv if "," in str(a)]))
+    check("el sobre JSON se desenvuelve", salida == "hecho", salida)
+    check("el motor declara si sabe trabajar en un repo",
+          ClaudeCodeEngine.agentic_capable and not Engine.agentic_capable,
+          "es una capacidad, no una marca: la skill no pregunta «¿eres Claude?»")
+
+    # ══════════════════ APLICACIONES ══════════════════
+    # Especifico de Windows (`winreg` no existe en otro sitio), asi que
+    # vive en su propia funcion y se salta entera fuera de Windows.
+    if sys.platform == "win32":
+        pruebas_windows(sandbox)
+
     # ══════════════════ PUSH TO TALK ══════════════════
     print("\n  ── push to talk ──")
     from voice.ptt import PushToTalk
@@ -456,6 +730,53 @@ async def main() -> int:
                         SystemAccess(clipboard=espia), pol_libre)
     check("una capacidad sin puerto no se ofrece", espia.log == [], str(espia.log))
 
+    # ── el modelo pequeño: tolerar la FORMA, no aflojar el fondo ──
+    # Regla 3 del CLAUDE.md: un prompt debe funcionar con un 8B local. Estas
+    # son las salidas que de verdad produce uno, y cada una costaba el turno
+    # entero antes de tolerarlas.
+    espia.log.clear()
+    res_o = await pedir("Claro, Jefe. {'accion': 'volumen_cambiar', "
+                        "'args': {'cuanto': 20}, 'porque': 'subir',}",
+                        libre, pol_libre)
+    check("comillas simples, coma colgante y prosa alrededor",
+          espia.log == [("volume", 20)], str(espia.log))
+
+    # La que mas dolia: eligio bien y se tiraba por un campo de metadatos.
+    espia.log.clear()
+    res_o = await pedir('{"accion":"silenciar","args":{}}', libre, pol_libre)
+    check("que falte la confianza no es que el modelo dude",
+          espia.log == [("mute",)],
+          "antes contestaba «no me quedo claro» con la accion ya elegida")
+
+    espia.log.clear()
+    res_o = await pedir('{"accion":"silenciar","args":{},"confianza":"alta"}',
+                        libre, pol_libre)
+    check("la confianza en palabras tambien vale", espia.log == [("mute",)],
+          str(espia.log))
+
+    espia.log.clear()
+    res_o = await pedir('{"accion":"volumen_fijar","args":"{\\"nivel\\": 30}",'
+                        '"confianza":85}', libre, pol_libre)
+    check("args anidados como texto y confianza en porcentaje",
+          espia.log == [("set_volume", 30)], str(espia.log))
+
+    espia.log.clear()
+    res_o = await pedir('{"accion":"Volumen Cambiar","args":{"cuanto":5},'
+                        '"confianza":0.9}', libre, pol_libre)
+    check("el nombre de la accion se normaliza",
+          espia.log == [("volume", 5)], str(espia.log))
+
+    # Y lo que NO se afloja: la lista blanca y la desconfianza declarada.
+    espia.log.clear()
+    res_o = await pedir('{"accion":"formatear_disco","args":{},"confianza":"alta"}',
+                        libre, pol_libre)
+    check("tolerar la forma no abre la lista blanca", espia.log == [], str(espia.log))
+    espia.log.clear()
+    res_o = await pedir('{"accion":"silenciar","args":{},"confianza":0.2}',
+                        libre, pol_libre)
+    check("una confianza baja DICHA si se respeta", espia.log == [],
+          "ausente y baja son cosas distintas")
+
     check("toda accion del catalogo tiene implementacion",
           all(a.nombre in {
               "volumen_cambiar", "volumen_fijar", "silenciar", "reproduccion",
@@ -487,6 +808,46 @@ async def main() -> int:
     check("skill sin puerto degrada limpio",
           not res_s.ok and "sistema" not in res_s.speak.lower()[:5],
           res_s.speak[:70])
+
+    # ── el enrutado se equivoca; lanzar no puede ser el plan B ──
+    # El 17/08/2026, con un modelo local, «Descríbete a ti misma en dos
+    # palabras» se enruto a `sistema` con confianza 0.85 y FRIDAY abrio el
+    # changelog de WinRAR. El enrutado es probabilistico y siempre lo sera;
+    # lo que no puede serlo es que la rama por defecto de una skill con
+    # efecto sobre la maquina sea «lanza lo que mejor puntue».
+    class CatalogoFalso:
+        def __init__(self): self.consultas: list[str] = []
+        def find(self, query, limit=5):
+            self.consultas.append(query)
+            return [AppInfoPorts("Que hay de nuevo en la ultima version",
+                                 "C:/x/winrar.lnk", "shortcut", None, 0.45)]
+        def refresh(self): return 1
+
+    class LanzadorFalso:
+        def __init__(self): self.lanzadas: list[str] = []
+        def launch(self, app, args=None):
+            self.lanzadas.append(app.name)
+            return True
+
+    from system.ports import AppInfo as AppInfoPorts
+
+    cat_falso, lanz_falso = CatalogoFalso(), LanzadorFalso()
+    acceso_apps = SystemAccess(apps=cat_falso, launcher=lanz_falso)
+    ctx_s = SkillContext(real_cfg, vault, graph, FakeEngine(real_cfg),
+                         text="Descríbete a ti misma en dos palabras.",
+                         system=acceso_apps, policy=policy)
+    res_mal = await skills["sistema"].run(ctx_s)
+    check("una frase sin verbo de accion NO lanza nada",
+          not lanz_falso.lanzadas and not res_mal.ok,
+          f"lanzadas={lanz_falso.lanzadas}")
+    check("y ni siquiera se consulta el catalogo",
+          not cat_falso.consultas,
+          "buscar una frase entera en el Menu Inicio es como empieza el accidente")
+
+    ctx_s.text = "abre discord"
+    res_bien = await skills["sistema"].run(ctx_s)
+    check("y «abre X» sigue lanzando", bool(lanz_falso.lanzadas) and res_bien.ok,
+          f"lanzadas={lanz_falso.lanzadas}")
 
     # flujo de confirmacion completo
     seed(sandbox)

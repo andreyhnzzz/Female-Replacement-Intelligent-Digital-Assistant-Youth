@@ -27,12 +27,23 @@ que no lo contiene.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import re
+from dataclasses import dataclass
 from typing import Any, Callable
+
+from core.engine import ask_json, enum_schema
 
 from .base import PendingAction, Skill, SkillContext, SkillResult
 
 CONFIANZA_MINIMA = 0.55
+
+# Un modelo pequeño escribe la confianza con palabras tan a menudo como con
+# numeros. Tirar su respuesta por eso seria castigar la forma, no el fondo.
+CONFIANZA_TEXTO: dict[str, float] = {
+    "muy alta": 0.95, "alta": 0.9, "high": 0.9, "very high": 0.95,
+    "media": 0.65, "moderada": 0.65, "medium": 0.65, "normal": 0.65,
+    "baja": 0.3, "low": 0.3, "muy baja": 0.15, "ninguna": 0.0,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,7 +66,13 @@ CATALOGO: tuple[Accion, ...] = (
            "sube o baja el volumen. 'cuanto' es positivo para subir y "
            "negativo para bajar, en puntos porcentuales (10 = un poco, 30 = mucho)",
            puerto="media", control="media", args=("cuanto",),
-           ejemplos=("subele", "baja el volumen", "no te oigo", "esto suena altisimo")),
+           # Los ejemplos llevan el ARGUMENTO, no solo la frase. Un 8B
+           # elegia bien la accion en «no te oigo» y le ponia -20: entendio
+           # que hablabamos de volumen y no de que direccion. La descripcion
+           # explica el signo en abstracto; el ejemplo lo enseña.
+           ejemplos=("subele -> +15", "no te oigo -> +20",
+                     "mas alto -> +20", "baja el volumen -> -15",
+                     "esto suena altisimo -> -30", "bajale un poco -> -10")),
     Accion("volumen_fijar",
            "pone el volumen en un nivel absoluto de 0 a 100",
            puerto="media", control="media", args=("nivel",),
@@ -65,10 +82,15 @@ CATALOGO: tuple[Accion, ...] = (
            puerto="media", control="media",
            ejemplos=("silencia", "mutea", "quita el sonido")),
     Accion("reproduccion",
-           "controla lo que se este reproduciendo. 'accion' es exactamente uno "
+           "controla QUE suena, no a que volumen. 'accion' es exactamente uno "
            "de: play_pause, next, prev, stop",
            puerto="media", control="media", args=("accion",),
-           ejemplos=("pausa", "siguiente cancion", "vuelve a la anterior")),
+           # «Saltate esta cancion» se lo llevaba `volumen_cambiar` con un 8B:
+           # ambas son «de audio», y sin un ejemplo cercano el modelo pequeño
+           # se queda con la accion mas comun. Los ejemplos no son adorno del
+           # prompt, son lo unico que separa dos acciones vecinas.
+           ejemplos=("pausa", "siguiente cancion", "saltate esta cancion",
+                     "quita esta cancion", "vuelve a la anterior", "para la musica")),
     Accion("copiar",
            "escribe un texto en el portapapeles para que el usuario lo pegue",
            puerto="clipboard", control="clipboard", args=("texto",),
@@ -101,6 +123,9 @@ class OrdenadorSkill(Skill):
     triggers = [
         r"\bvolumen\b", r"\bsube(le)?\b", r"\bbaja(le)?\b", r"\bsilencia\b",
         r"\bmutea?\b", r"\bpausa\b", r"\breanuda\b", r"\bsiguiente canci[oó]n\b",
+        # Llegar a la skill sin gastar motor: cual de las nueve acciones es
+        # lo sigue decidiendo el, pero ya no paga la llamada de enrutado.
+        r"\bs[aá]ltate\b", r"\bsalta (esta|la) canci[oó]n\b",
         r"\bcanci[oó]n anterior\b", r"\bportapapeles\b", r"\bcopia(me)?\b",
         r"\bqu[eé] tengo copiado\b", r"\bbloquea\b", r"\bsuspende\b",
         r"\bminimiza\b", r"\bno te (oigo|escucho)\b", r"\bqu[ií]tale (el )?sonido\b",
@@ -138,43 +163,114 @@ class OrdenadorSkill(Skill):
     # ══════════════════════════════ decidir (el motor, no un guion)
     async def _decidir(self, ctx: SkillContext,
                        disponibles: list[Accion]) -> tuple[Accion, dict, str] | None:
-        catalogo = "\n".join(
-            f"- {a.nombre}({', '.join(a.args)}): {a.describe}"
-            + (f"  ej: {', '.join(a.ejemplos)}" if a.ejemplos else "")
+        # Los ejemplos van en su propia linea, no pegados a la descripcion:
+        # con un 8B, una linea que mezcla nombre, argumentos, descripcion y
+        # ejemplos se lee como un parrafo y las acciones vecinas se
+        # confunden entre si.
+        catalogo = "\n\n".join(
+            f"{a.nombre}({', '.join(a.args)})\n  que hace: {a.describe}"
+            + (f"\n  se pide asi: {'; '.join(a.ejemplos)}" if a.ejemplos else "")
             for a in disponibles)
 
         prompt = (
-            f"El usuario le dijo esto a su asistente de escritorio:\n"
-            f"\"{ctx.text.strip()}\"\n\n"
-            f"ACCIONES POSIBLES:\n{catalogo}\n\n"
-            "Elige UNA accion de la lista y sus argumentos. Si ninguna encaja, "
-            "usa \"ninguna\".\n\n"
+            f"ACCIONES POSIBLES:\n\n{catalogo}\n\n"
+            "Nombres validos, copia uno tal cual:\n"
+            + ", ".join(a.nombre for a in disponibles) + ", ninguna\n\n"
+            # La frase del usuario va AL FINAL, pegada a la respuesta. Un
+            # modelo pequeño atiende mucho mejor a lo ultimo que leyo: con
+            # la peticion arriba del catalogo, elegia la primera accion de
+            # la lista casi siempre.
+            f"EL USUARIO DIJO:\n\"{ctx.text.strip()}\"\n\n"
+            "Elige la accion de la lista que corresponde a esa frase.\n\n"
             "Responde SOLO este JSON, sin nada mas:\n"
-            '{"accion": "nombre_exacto_de_la_lista", "args": {}, '
-            '"confianza": 0.0, "porque": "5 palabras"}'
+            # Los valores de la plantilla son EJEMPLOS PLAUSIBLES, no ceros.
+            # Un modelo pequeño copia la plantilla tal cual: con
+            # `"confianza": 0.0` ahi, devolvia 0.0 siempre y el umbral
+            # tiraba la accion. El hueco que dejas es la respuesta que te dan.
+            '{"accion": "nombre_de_la_lista", "args": {"cuanto": 20}, '
+            '"confianza": 0.9, "porque": "por que la elegiste"}'
         )
 
+        # El esquema acota `accion` a la lista: donde el backend lo soporte,
+        # inventarse un nombre deja de ser posible en vez de solo estar mal.
+        #
+        # `confianza` queda OPCIONAL a proposito. Exigirla no hace que el
+        # modelo la estime: hace que la rellene. Un 8B ponia `0` en todas y
+        # el umbral tiraba acciones perfectamente elegidas.
+        schema = enum_schema(
+            {"accion": [a.nombre for a in disponibles] + ["ninguna"],
+             "args": "object", "confianza": "number", "porque": "string"},
+            requeridos=["accion", "args"])
+
         try:
-            data = ctx.engine.extract_json(
-                await ctx.engine.complete(prompt, system=ctx.cfg.persona())) or {}
+            data = await ask_json(ctx.engine, prompt, schema=schema) or {}
         except Exception:
             return None
 
-        nombre = str(data.get("accion", "")).strip()
         # El catalogo es la lista blanca: lo que no esta aqui no existe,
         # diga el modelo lo que diga.
-        accion = next((a for a in disponibles if a.nombre == nombre), None)
+        nombre = self._normaliza(data.get("accion", ""))
+        accion = next((a for a in disponibles
+                       if self._normaliza(a.nombre) == nombre), None)
         if accion is None:
             return None
-        try:
-            confianza = float(data.get("confianza", 0))
-        except (TypeError, ValueError):
-            confianza = 0.0
-        if confianza < CONFIANZA_MINIMA:
+
+        if self._confianza(data.get("confianza")) < CONFIANZA_MINIMA:
             return None
 
-        args = data.get("args")
-        return accion, (args if isinstance(args, dict) else {}), str(data.get("porque", ""))
+        return accion, self._args(data.get("args")), str(data.get("porque", ""))
+
+    # ── tolerancia con la forma, no con el fondo ──────────────────
+    @staticmethod
+    def _normaliza(nombre: Any) -> str:
+        """«Volumen Cambiar», «volumen-cambiar» y «volumen_cambiar» son lo mismo.
+
+        La lista blanca sigue siendo la lista blanca: esto normaliza la
+        forma del nombre, no admite nombres que no esten en ella.
+        """
+        return re.sub(r"[\s\-]+", "_", str(nombre).strip().lower())
+
+    @staticmethod
+    def _confianza(valor: Any) -> float:
+        """Cuanta confianza declaro el modelo.
+
+        **Que falte no es que dude.** Un modelo pequeño omite campos de
+        metadatos constantemente, y tratar la ausencia como cero significaba
+        tirar acciones perfectamente elegidas y contestar «no me quedo
+        claro» — el fallo mas caro que tenia esta skill, porque suena a
+        «no se hacer eso» cuando en realidad si sabia.
+
+        No se afloja ninguna garantia real al hacerlo: la accion sigue
+        teniendo que estar en el catalogo, el puerto sigue teniendo que
+        existir y la politica sigue mandando. Este numero nunca fue el
+        guardia; es una señal del modelo sobre si mismo.
+        """
+        if valor is None or (isinstance(valor, str) and not valor.strip()):
+            return CONFIANZA_MINIMA
+        if isinstance(valor, str):
+            clave = valor.strip().lower().rstrip("%")
+            if clave in CONFIANZA_TEXTO:
+                return CONFIANZA_TEXTO[clave]
+        try:
+            n = float(valor)
+        except (TypeError, ValueError):
+            return CONFIANZA_MINIMA          # lo dijo, pero no lo entendimos
+        return n / 100.0 if n > 1.0 else n   # «85» es 0.85, no un 8500%
+
+    @staticmethod
+    def _args(valor: Any) -> dict[str, Any]:
+        """Los argumentos, vengan como vengan.
+
+        Un modelo pequeño a veces mete el objeto anidado como texto
+        (`"args": "{\\"cuanto\\": 25}"`). Es la misma respuesta correcta con
+        una comilla de mas.
+        """
+        if isinstance(valor, dict):
+            return valor
+        if isinstance(valor, str) and valor.strip():
+            from core.engine import Engine
+            return Engine.extract_json(valor) or {}
+        return {}
 
     # ══════════════════════════════ ejecutar, con el guardia delante
     async def _ejecutar(self, ctx: SkillContext, accion: Accion,

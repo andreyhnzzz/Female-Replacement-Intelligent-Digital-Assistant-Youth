@@ -10,6 +10,8 @@ from __future__ import annotations
 import re
 from datetime import datetime
 
+from core.engine import ask_json
+
 from .base import Skill, SkillContext, SkillResult
 from memory.vault import slugify
 
@@ -57,8 +59,9 @@ class VaultSkill(Skill):
         title, body, tags, links = None, None, [], []
         degraded = ""
         try:
-            raw = await ctx.engine.complete(prompt, system=ctx.cfg.persona())
-            data = ctx.engine.extract_json(raw) or {}
+            # Sin persona: es un contrato, no una frase hablada. El tono
+            # sale en el `speak`, que lo arma Python mas abajo.
+            data = await ask_json(ctx.engine, prompt) or {}
             title = (data.get("title") or "").strip() or None
             body = (data.get("body") or "").strip() or None
             tags = [str(t) for t in (data.get("tags") or [])][:6]

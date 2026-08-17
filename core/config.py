@@ -1,4 +1,18 @@
-"""Carga de configuracion. Un solo objeto, acceso por ruta punteada."""
+"""Carga de configuracion. Un solo objeto, acceso por ruta punteada.
+
+Dos archivos, y la diferencia importa porque este repo es publico:
+
+    config/friday.toml         se versiona. Es el ejemplo que ve todo el
+                               mundo: valores por defecto y documentacion.
+    config/friday.local.toml   NO se versiona. Lo tuyo: las rutas de tus
+                               proyectos, tus alias, tus claves.
+
+El segundo se fusiona **encima** del primero, tabla por tabla, asi que solo
+tienes que escribir lo que cambies. Si no existe, no pasa nada.
+
+Sin esta separacion, configurar FRIDAY significaba editar un archivo
+versionado, y entonces tu disco acaba en un commit. Ha pasado.
+"""
 from __future__ import annotations
 
 import tomllib
@@ -8,8 +22,24 @@ from typing import Any
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def _merge(base: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
+    """Fusion profunda: `extra` gana, pero solo en lo que menciona.
+
+    Las listas se reemplazan enteras, no se concatenan: si declaras
+    `agent_roots` en tu archivo local, quieres **esas** raices, no esas mas
+    las del ejemplo.
+    """
+    out = dict(base)
+    for clave, valor in extra.items():
+        if isinstance(valor, dict) and isinstance(out.get(clave), dict):
+            out[clave] = _merge(out[clave], valor)
+        else:
+            out[clave] = valor
+    return out
+
+
 class Config:
-    """Wrapper de solo lectura sobre friday.toml.
+    """Wrapper de solo lectura sobre friday.toml (+ friday.local.toml).
 
     Uso:  cfg.get("voice.stt.model", "small")
           cfg["engine"]["backend"]
@@ -19,9 +49,10 @@ class Config:
         self.path = Path(path) if path else ROOT / "config" / "friday.toml"
         if not self.path.exists():
             raise FileNotFoundError(f"No encuentro la config: {self.path}")
-        with open(self.path, "rb") as fh:
-            self._data: dict[str, Any] = tomllib.load(fh)
+        self.local_path = self.path.with_name(f"{self.path.stem}.local.toml")
         self.root = ROOT
+        self._data: dict[str, Any] = {}
+        self.reload()
 
     def get(self, dotted: str, default: Any = None) -> Any:
         node: Any = self._data
@@ -62,9 +93,17 @@ class Config:
         text = pf.read_text(encoding="utf-8") if pf.exists() else ""
         return text.replace("{user_title}", self.get("identity.user_title", "Jefe"))
 
+    @property
+    def has_local(self) -> bool:
+        return self.local_path.exists()
+
     def reload(self) -> None:
         with open(self.path, "rb") as fh:
-            self._data = tomllib.load(fh)
+            data = tomllib.load(fh)
+        if self.local_path.exists():
+            with open(self.local_path, "rb") as fh:
+                data = _merge(data, tomllib.load(fh))
+        self._data = data
 
 
 _singleton: Config | None = None

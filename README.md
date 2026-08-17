@@ -134,7 +134,7 @@ Arrástralo desde el núcleo. Clic derecho para el menú, doble clic para escrib
 
 ---
 
-## 🧠 Las 12 skills
+## 🧠 Las 13 skills
 
 FRIDAY enruta sola. No hay que invocarlas por nombre.
 
@@ -142,10 +142,11 @@ FRIDAY enruta sola. No hay que invocarlas por nombre.
 
 | Skill | Ejemplos |
 |---|---|
-| **sistema** | *"abre Spotify"* · *"abre YouTube"* · *"qué tengo abierto"* · *"busca gatos en google"* |
+| **sistema** | *"abre Geometry Dash"* · *"abre YouTube"* · *"qué tengo abierto"* · *"busca gatos en google"* |
 | **archivos** | *"organiza mis descargas"* · *"busca el archivo presupuesto"* · *"renombra …"* |
 | **pantalla** | *"qué estoy viendo"* · *"explícame esto"* |
 | **ordenador** | *"no te oigo"* · *"ponlo a la mitad"* · *"sáltate esta canción"* · *"qué tengo copiado"* |
+| **taller** | *"métete en mi-proyecto y revisa por qué fallan los tests"* |
 
 ### 🌐 Sobre el mundo
 
@@ -177,6 +178,86 @@ cobertura — por eso *"ponme al día con las noticias"* va a `noticias` y
 
 Lo mismo con *"cambia a"*: **`cambia a Sonnet`** es un modelo, **`cambia a
 Chrome`** es una ventana. Lo que decide no es el verbo, es el objeto.
+
+Y antes que nada de eso hay un tercer camino: **seguimiento**. Si la frase no
+se sostiene sola, es del hilo de conversación y no de ninguna skill.
+
+---
+
+## 💬 Conversar, no solo mandar
+
+Además de las órdenes, FRIDAY sostiene una conversación como la sostendría por
+escrito. Los últimos turnos viven en RAM, así que una frase puede apoyarse en
+la anterior:
+
+```
+› qué es una TPU, en una frase
+  Un chip diseñado por Google para acelerar operaciones de redes neuronales…
+
+› y eso cuánto cuesta
+  No se venden sueltas: Google las alquila por hora en Google Cloud…
+```
+
+Ese segundo turno es la parte difícil. *"Y eso cuánto cuesta"* dispara el
+`\bcuánto\b` de `metricas`: sin el paso de seguimiento, preguntar por un precio
+te devuelve el uso de CPU. Se reconoce por **anáfora** (*eso*, *lo que
+dijiste*) o por conectivo más pregunta pelada (*"¿y por qué?"*), y un verbo de
+acción lo cancela — *"abre eso"* lleva anáfora pero es una orden.
+
+La conversación libre **no** usa contrato JSON, a diferencia de las skills:
+pedirle a un modelo que converse dentro de un campo de JSON le encoge las
+respuestas a una frase de trámite, y con un 8B local rompe el formato cada
+tanto y se pierde el turno. El panel recibe todo; la voz corta por frases
+enteras, nunca a media palabra.
+
+```toml
+[chat]
+max_turns       = 12    # turnos recordados
+ttl_s           = 900   # sin hablar este rato, el hilo se corta solo
+speak_max_chars = 700   # lo que se dice; el panel lleva el resto
+```
+
+Vive en RAM y se pierde al cerrar, **a propósito**: esto no es memoria. La
+memoria es markdown y se gana diciendo *"recuerda que…"*. Di *"cambiemos de
+tema"* para cortar el hilo a mano.
+
+---
+
+## 🛠️ El taller: encargarle trabajo, no pedirle texto
+
+```
+› métete en mi-proyecto y explica en dos frases qué hace
+  Voy con ello, Jefe. Te aviso cuando acabe.
+  … 14 s después …
+  Listo lo de mi-proyecto. Es una aplicación de escritorio que…
+```
+
+La terminal, pero hablando. El encargo **no bloquea el turno**: un agente tarda
+minutos, así que la voz acusa recibo y el resultado vuelve por el bus cuando
+está. Mientras tanto FRIDAY sigue atendiendo.
+
+Es la capacidad más peligrosa que tiene, así que es la que más guardias lleva:
+
+| Guardia | Qué evita |
+|---|---|
+| `policy.agent_roots` — lista blanca explícita | Que un nombre mal transcrito acabe en un directorio cualquiera. **No hereda de `write_roots`**: poder guardar un briefing en Documentos no es poder refactorizar ahí. |
+| El proyecto se **reconoce**, no se adivina | Si dos carpetas responden igual de bien, no gana ninguna: pregunta. |
+| Leer ≠ escribir | *"Revisa"* corre sola con herramientas de solo lectura. *"Arregla"* espera un **sí** hablado, repitiendo qué tarea y en qué ruta. |
+| Aviso de repo sucio | Si hay cambios sin commitear, lo dice antes de dejar escribir: es la diferencia entre poder deshacer el trabajo del agente y no. |
+| `bypassPermissions` clavado a no | Ni pidiéndolo por config. Si una tarea lo necesita, la haces tú en la terminal. |
+
+Viene **apagada de fábrica**: `agent_roots` está vacía, así que recién
+instalada esta capacidad no alcanza ninguna carpeta tuya. Tus rutas van en
+`config/friday.local.toml`, que no se versiona:
+
+```toml
+[policy]
+allow_agent = true
+agent_roots = ["~/proyectos", "~/trabajo/api-clientes"]
+```
+
+La skill no sabe que existe Claude: pide *un motor que sepa trabajar en un
+repo* (`agentic_capable`) y el conmutador le da el que haya.
 
 ---
 
@@ -218,6 +299,117 @@ arranque por defecto porque funciona sin configurar nada.
 
 Añadir un proveedor nuevo es una clase que herede de `Engine` y una entrada en
 el roster. Nada fuera de `core/engine.py` sabe que Claude existe.
+
+---
+
+## 🦙 ¿Y con un modelo local?
+
+Sí, salvo el taller. La regla 3 del repo dice que *un prompt debe funcionar con
+un 8B local*, y cuando se midió de verdad no se cumplía. Medido con
+**`llama3.1:8b` (Q4_K_M) sobre Ollama**, elección de acción del catálogo:
+
+| | acierto |
+|---|---|
+| Antes | 6 / 12 |
+| Después | **12 / 12** (igual que Sonnet 5) |
+
+Lo revelador es **qué** lo arregló. Por orden de impacto medido:
+
+1. **La frase del usuario, al final del prompt.** Ella sola: 6/12 → 12/12. Con
+   la petición arriba del catálogo, el 8B elegía casi siempre la primera acción
+   de la lista. Atiende a lo último que leyó.
+2. **Los huecos de la plantilla se copian literalmente.** El ejemplo del
+   contrato decía `"confianza": 0.0` y el modelo devolvía `0.0` **siempre** —
+   por debajo del umbral, así que se descartaba cada acción. Un valor de
+   ejemplo plausible (`0.9`) y desaparece el problema. El hueco que dejas es
+   la respuesta que te dan.
+3. **Que falte un campo de metadatos no es una negativa.** La confianza ausente
+   se trataba como `0.0`. Los modelos pequeños omiten campos accesorios todo el
+   rato; ahora la ausencia no penaliza, pero una confianza baja *dicha* sí se
+   respeta.
+4. **La persona fuera de las llamadas con contrato.** Son 4 KB de carácter
+   («expresiva, urgencia compartida, marcos verbales…») que viajaban como
+   system prompt en llamadas que solo debían devolver `{"accion": …}`. Claude
+   obedece la cláusula de formato del final; un 8B se pone a hablar en
+   personaje. Ahí no falló el modelo: le pedíamos dos cosas incompatibles.
+5. **Los ejemplos llevan el argumento, no solo la frase.** Con `no te oigo` a
+   secas el modelo acertaba la acción y le ponía `-20`. Con `no te oigo -> +20`
+   aprende el signo.
+6. **Las palabras vacías no puntúan en la búsqueda del vault.** Con «que» y
+   «los» contando, casi cualquier pregunta traía alguna nota, y esa nota se
+   inyecta como contexto. Claude ignora el ruido; el 8B respondía sobre ella.
+
+Y una defensa que sale gratis: donde el backend lo soporta, la lista blanca
+viaja como **esquema JSON** (`format` en Ollama, `response_format` en el
+dialecto OpenAI), así que inventarse una acción deja de ser posible en vez de
+solo estar mal. Curiosamente **no cambió la precisión** (12/12 con y sin), pero
+elimina una clase entera de fallo.
+
+Todo esto vive en `core/engine.py::ask_json`, por donde pasa toda llamada con
+contrato.
+
+**Lo que no se puede en local:** el **taller**. Necesita un bucle de
+herramientas que este repo deliberadamente no tiene, y por eso
+`OllamaEngine.agentic_capable` es `False` — es honesto, no una carencia
+pendiente.
+
+**Lo que ni se entera del modelo:** todo el camino rápido — abrir apps y
+juegos, ventanas, búsquedas, archivos, agenda. Regex, 0 ms, sin motor.
+
+```powershell
+ollama serve ; ollama pull llama3.1:8b
+```
+
+```
+› cambia a local
+  Listo, Jefe. Pensando con Llama 3.1 8B.
+```
+
+Coste real en esta máquina: **~1,5-2 s** por llamada con contrato y **~4-5 s**
+por turno de conversación (la primera tras cargar el modelo, ~20 s). Frente a
+Claude pierdes calidad de redacción, no capacidad.
+
+---
+
+## 🎮 Abrir cosas: cuatro fuentes, no una carpeta
+
+*"Abre Geometry Dash"* no funcionaba, y no por el enrutado: el juego no existía
+para FRIDAY. El catálogo se armaba globeando `*.lnk` en el Menú Inicio, y ni los
+juegos de Steam ni las apps de la Store dejan acceso directo ahí.
+
+| Fuente | Qué aporta | Cómo se lanza |
+|---|---|---|
+| Menú Inicio (`*.lnk`) | lo clásico, y lo más barato de leer | el `.lnk` |
+| `Get-StartApps` | **todo** lo que ves en el menú, incluidas Store/UWP | `shell:AppsFolder\<AppID>` |
+| `steamapps/*.acf` | los juegos instalados, de **todas** las bibliotecas | `steam://rungameid/<appid>` |
+| PATH y URIs | `code`, `ms-settings:`, la papelera | directo |
+
+Los manifiestos de Steam son VDF plano: dos regex y ninguna dependencia nueva.
+Ojo con dar por hecho una sola biblioteca — quien tiene un SSD chico reparte los
+juegos, y `libraryfolders.vdf` es quien sabe dónde están.
+
+Y una tabla de alias para lo que se dice distinto de como se llama:
+
+```toml
+[system.app_aliases]
+navegador = ["brave", "google chrome"]   # cada alias admite varios candidatos
+```
+
+Los que sean tuyos van en `config/friday.local.toml` — ese archivo no se
+versiona, y así tus alias no le cuentan al mundo qué tienes instalado.
+
+**El navegador tampoco se elige aquí.** FRIDAY lee las aplicaciones
+predeterminadas de Windows y abre en el que tengas marcado — y lo nombra:
+
+```
+› busca capibaras en youtube
+  Buscando capibaras en Brave.        (6 ms, sin gastar motor)
+```
+
+`webbrowser.open` habría abierto el mismo navegador, pero a ciegas: no sabe
+cuál es, y además obedece a la variable `BROWSER`, que puede apuntar a algo que
+nunca elegiste. Leer el registro (`winreg`, biblioteca estándar) da el nombre,
+y el nombre es la diferencia entre un asistente y un `os.startfile` con voz.
 
 ---
 
@@ -280,15 +472,19 @@ allow_web_fetch    = true         # que FRIDAY salga a la red por su cuenta
 allow_media        = true         # volumen y reproducción
 allow_clipboard    = true         # leer y escribir el portapapeles
 allow_session      = false        # bloquear/suspender: apagado por defecto
+allow_agent        = true         # delegar trabajo en un repo (skill `taller`)
 confirm_over_files = 5            # sobre esto, pide confirmación hablada
 write_roots  = ["~/Documents", "~/Downloads", "~/Desktop", "~/Pictures"]
+agent_roots  = []                    # dónde puede soltar un agente (vacía = apagado)
 blocked_apps = ["regedit*", "diskpart*", "cmd.exe", "powershell*"]
 ```
 
 `allow_web` y `allow_web_fetch` son permisos distintos a propósito: uno entrega
-una URL a tu navegador —la petición la hace Chrome, con tu sesión—, el otro
-autoriza que FRIDAY salga a internet ella misma. El segundo es más fuerte y
-tiene su propio interruptor.
+una URL a tu navegador —la petición la hace tu navegador, con tu sesión—, el
+otro autoriza que FRIDAY salga a internet ella misma. El segundo es más fuerte
+y tiene su propio interruptor. `agent_roots` va aparte de `write_roots` por lo
+mismo: delegar en algo que decide solo qué archivos tocar no es lo mismo que
+escribir un archivo que tú pediste.
 
 Además hay un suelo **no configurable**: `C:\Windows`, `Program Files`,
 `ProgramData`, las extensiones críticas (`.sys`, `.dll`, `.msi`…) y **toda la
@@ -401,7 +597,8 @@ config/                friday.toml (todo) · persona.md (tono)
 core/
   bus.py               pub/sub asíncrono: nadie importa a nadie
   engine.py            adaptadores + roster + ⭐ EngineSwitch
-  router.py            confirmación → rápido → pensado
+  router.py            confirmación → seguimiento → rápido → pensado
+  chat.py              el hilo de conversación (RAM, no memoria)
   policy.py            el guardia de permisos
   privacy.py           candado de red del audio
 memory/                vault.py (markdown) · graph.py (enlaces)
@@ -410,8 +607,9 @@ system/
   factory.py           lo único que sabe en qué SO corre
   net.py               ⭐ la única salida HTTP del proyecto
   files.py · web.py · news.py · pages.py
-  win32/               implementaciones de Windows (apps, ventanas, escritorio)
-skills/                las 12 manos
+  win32/               implementaciones de Windows (apps, ventanas, escritorio,
+                       apps predeterminadas)
+skills/                las 13 manos
 voice/                 ptt · stt · tts
 desktop/
   app.py               ventana nativa + bandeja
@@ -472,8 +670,8 @@ conversación no deja ninguna referencia colgando.
 ## 🧪 Pruebas
 
 ```powershell
-.\.venv\Scripts\python scripts\smoke_test.py     # 46 · memoria, skills, enrutado, privacidad
-.\.venv\Scripts\python scripts\system_test.py    # 64 · política, puertos, red, motor, PTT
+.\.venv\Scripts\python scripts\smoke_test.py     # 62 · memoria, skills, enrutado, conversación
+.\.venv\Scripts\python scripts\system_test.py    # 117 · política, puertos, red, motor, taller, PTT
 ```
 
 Sobre directorios temporales, motor simulado y feeds sintéticos: no tocan tu
@@ -503,6 +701,12 @@ El HUD se revisa mirándolo, no leyéndolo:
 | Las noticias no llegan | Revisa `[policy] allow_web_fetch` y `[system] contact`. El panel dice qué feed falló. |
 | "Investiga" no encuentra nada | Sin contacto en el User-Agent la fuente responde 403. Pon `[system] contact`. |
 | El panel se ve translúcido de más | Activa `[desktop] backdrop = "acrylic"` para desenfoque real de Windows 11. |
+| Parpadea una ventana negra al hablarle | Ya no debería: todo proceso hijo va con `CREATE_NO_WINDOW` (`core/proc.py`). Si vuelve, es un `subprocess` nuevo sin el flag. |
+| Abrió un programa que no le pedí | Pasaba cuando el enrutado fallaba: `sistema` lanzaba la mejor coincidencia de cualquier frase. Ahora exige un verbo de abrir. |
+| Un juego recién instalado no aparece | El catálogo se cachea 10 min (`[system] app_cache_s`). |
+| "No tengo ningún directorio donde trabajar" | `[policy] agent_roots` está vacía. Es lo correcto de fábrica: declara dónde. |
+| "No reconozco ese proyecto" | El nombre no coincide con ninguna carpeta bajo `agent_roots`, o coincide con dos. El panel lista las que ve. |
+| Un "y eso…" contesta otra cosa | El hilo se enfría a los 15 min (`[chat] ttl_s`). Pasado ese rato, es una pregunta nueva. |
 
 ---
 
@@ -511,14 +715,13 @@ El HUD se revisa mirándolo, no leyéndolo:
 Lo pendiente, lo decidido a conciencia y lo de algún día está en
 **[ROADMAP.md](ROADMAP.md)**. Lo más inmediato:
 
-- **Encargarle trabajo a Claude Code por voz** — *"métete en mi-proyecto y
-  revisa por qué fallan los tests"*. El modo agéntico del motor ya existe;
-  falta quien lo llame, y las barreras para que un STT que se equivoca no
-  suelte un agente con permiso de escritura en el sitio equivocado.
-- **Juegos de Steam y apps de Microsoft Store** — Brave y el cliente de Steam
-  ya se abren; los juegos y las apps empaquetadas no aparecen en el catálogo.
-- **Bluetooth, wifi y brillo**, y que cuando no sepa hacer algo lo diga por su
-  nombre en vez de un genérico *"no me quedó claro"*.
+- **Bluetooth, wifi y brillo** — hoy no existen en el catálogo de acciones, y
+  es una petición razonabilísima para un asistente de escritorio.
+- **Que diga qué no sabe hacer** por su nombre (*"no sé desactivar el
+  Bluetooth"*) en vez de un genérico *"no me quedó claro"*: entender la
+  petición y no tener la capacidad son dos fallos distintos.
+- **Instalar la voz de Piper** — está configurada, pero sin el `.onnx` cae
+  siempre a SAPI5.
 
 ---
 

@@ -23,6 +23,13 @@ models/piper/*.onnx
 models/piper/*.json
 models/piper/_out.wav
 
+# ── Tu configuracion es tuya ────────────────────────────────────
+# `friday.toml` es el ejemplo publico. Lo que cambies para TI va aqui y se
+# fusiona encima: las rutas de tus proyectos (`policy.agent_roots`), tus
+# alias de aplicaciones, tus claves. Sin este archivo, configurar FRIDAY
+# significaba editar algo versionado y publicar tu disco en un commit.
+config/friday.local.toml
+
 # ── Tu memoria es tuya ──────────────────────────────────────────
 # Este repo es publico y en vault/ caen tus transcripciones de voz,
 # tu log diario y tus planes. Se versiona la SEMILLA, no lo que captures.

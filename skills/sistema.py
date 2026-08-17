@@ -55,7 +55,29 @@ class SistemaSkill(Skill):
             return self._web_search(ctx, text)
         if FOCUS.search(text) and not OPEN.search(text):
             return self._focus(ctx, text)
-        return self._open(ctx, text)
+        if OPEN.search(text):
+            return self._open(ctx, text)
+
+        # Sin verbo de abrir, esto NO es una peticion para esta skill.
+        #
+        # Lanzar era la rama por defecto, y eso convertia cualquier error de
+        # enrutado en un programa abierto. Paso de verdad el 17/08/2026 con
+        # un modelo local: «Descríbete a ti misma en dos palabras» se enruto
+        # aqui con confianza 0.85 y FRIDAY abrio el changelog de WinRAR,
+        # porque su acceso directo compartia la palabra «en».
+        #
+        # El enrutado es probabilistico y siempre lo sera. Lo que no puede
+        # ser probabilistico es lo que ocurre cuando se equivoca: una skill
+        # con efecto sobre la maquina tiene que reconocer lo suyo, no
+        # quedarse con todo lo que le caiga.
+        return SkillResult(
+            ok=False, error="no es una peticion de sistema",
+            speak="No te segui, Jefe. ¿Quieres que abra algo?",
+            display=("# No lo tengo claro\n\nEso me llego como si fuera una "
+                     "orden para la computadora, pero no dice que abrir, que "
+                     "enfocar ni que buscar.\n\nPrueba con **«abre X»**, "
+                     "**«cambia a X»** o **«busca X en google»**."),
+            data={"texto": text[:120], "motivo": "sin verbo de accion"})
 
     # ── abrir aplicacion ──────────────────────────────────────────
     def _open(self, ctx: SkillContext, text: str) -> SkillResult:
@@ -88,10 +110,12 @@ class SistemaSkill(Skill):
             if sys_.web is not None:
                 url = sys_.web.open_site(target)
                 if url:
+                    donde = getattr(sys_.web, "browser_name", "") or "el navegador"
                     return SkillResult(
-                        speak=f"{target} en el navegador.",
-                        display=f"# {target.title()}\n\nAbierto en el navegador.\n\n{url}",
-                        data={"action": "open_site", "site": target, "url": url})
+                        speak=f"{target} en {donde}.",
+                        display=f"# {target.title()}\n\nAbierto en **{donde}**.\n\n{url}",
+                        data={"action": "open_site", "site": target, "url": url,
+                              "browser": donde})
 
             return SkillResult(
                 ok=False, error="no encontrada",
@@ -196,7 +220,13 @@ class SistemaSkill(Skill):
                                speak=f"No pude abrir la busqueda. {reason}",
                                display=f"# Bloqueado\n\n> {reason}")
 
+        # El navegador no lo elige FRIDAY: usa el que tengas marcado como
+        # predeterminado en Windows, y lo nombra para que sepas donde mirar.
+        donde = getattr(sys_.web, "browser_name", "")
         return SkillResult(
-            speak=f"Buscando {query}.",
-            display=f"# Busqueda\n\n**{query}**\n\nmotor: `{engine}`\n\n{url}",
-            data={"action": "search", "query": query, "engine": engine, "url": url})
+            speak=f"Buscando {query}" + (f" en {donde}." if donde else "."),
+            display=(f"# Busqueda\n\n**{query}**\n\nmotor: `{engine}`"
+                     + (f"  ·  navegador: **{donde}**" if donde else "")
+                     + f"\n\n{url}"),
+            data={"action": "search", "query": query, "engine": engine,
+                  "url": url, "browser": donde})

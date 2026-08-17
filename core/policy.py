@@ -74,11 +74,17 @@ class Policy:
             "clipboard": bool(cfg.get(f"{p}.allow_clipboard", True)),
         }
 
+        self.allow_agent = bool(cfg.get(f"{p}.allow_agent", True))
+
         root = Path(cfg.root) if hasattr(cfg, "root") else Path.cwd()
         self.write_roots = self._resolve_roots(
             cfg.get(f"{p}.write_roots", ["~/Documents", "~/Downloads", "~/Desktop"]), root)
         self.read_roots = self._resolve_roots(
             cfg.get(f"{p}.read_roots", ["~"]), root)
+        # Donde se le puede soltar un agente. Lista aparte y vacia por
+        # defecto: no hay «raiz razonable» que adivinar, y adivinar mal
+        # aqui significa dejar a un agente suelto en tu disco.
+        self.agent_roots = self._resolve_roots(cfg.get(f"{p}.agent_roots", []), root)
 
     # ── raices ────────────────────────────────────────────────────
     @staticmethod
@@ -183,6 +189,44 @@ class Policy:
                             "policy.allow_shell")
         return Decision(Verdict.CONFIRM, "todo comando de shell se confirma", "shell")
 
+    def can_delegate(self, path: Path, writes: bool = False) -> Decision:
+        """Soltar un agente dentro de un directorio.
+
+        Es el permiso mas fuerte del sistema y por eso tiene el guardia mas
+        estrecho. No es «escribir un archivo»: es delegar en algo que
+        decide por su cuenta que archivos tocar, dirigido por un dictado
+        que a veces oye «Desactual Bluetooth» cuando dijiste «desactivar el
+        Bluetooth». Un encargo mal transcrito dentro de un repo real es una
+        tarde perdida, asi que:
+
+        - **Lista blanca explicita.** `agent_roots` vacia = no se delega en
+          ningun sitio. Sin herencia de `write_roots`: que FRIDAY pueda
+          guardar un briefing en Documentos no significa que pueda soltar
+          un agente ahi.
+        - **Leer no es escribir.** «Revisa por que fallan los tests» no
+          toca nada y no interrumpe con una confirmacion; «arregla los
+          tests» si, y espera un «si» dicho en voz alta.
+        """
+        if not self.enabled:
+            return Decision(Verdict.ALLOW, "politica desactivada")
+        if not self.allow_agent:
+            return Decision(Verdict.DENY, "delegar trabajo esta deshabilitado",
+                            "policy.allow_agent")
+        if not self.agent_roots:
+            return Decision(Verdict.DENY,
+                            "no hay ningun directorio declarado en agent_roots",
+                            "policy.agent_roots")
+        if self._is_hard_denied(path):
+            return Decision(Verdict.DENY, "carpeta protegida del sistema", "hard-deny")
+        if not self._under(path, self.agent_roots):
+            return Decision(Verdict.DENY,
+                            "fuera de los directorios donde puedo delegar trabajo",
+                            "policy.agent_roots")
+        if writes:
+            return Decision(Verdict.CONFIRM,
+                            "va a modificar archivos del proyecto", "agent-write")
+        return Decision(Verdict.ALLOW)
+
     def can_web(self, url: str) -> Decision:
         if not self.enabled:
             return Decision(Verdict.ALLOW, "politica desactivada")
@@ -263,7 +307,9 @@ class Policy:
             "shell": self.allow_shell,
             "web": self.allow_web,
             "web_fetch": self.allow_web_fetch,
+            "agent": self.allow_agent,
             "control": dict(self.control),
             "confirm_over": self.confirm_over,
             "write_roots": [str(r) for r in self.write_roots],
+            "agent_roots": [str(r) for r in self.agent_roots],
         }

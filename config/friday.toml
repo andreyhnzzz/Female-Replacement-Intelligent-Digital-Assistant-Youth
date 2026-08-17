@@ -137,7 +137,14 @@ fov         = 42
 # SISTEMA  —  las manos sobre la computadora.
 # ----------------------------------------------------------
 [system]
-app_cache_s      = 120       # TTL del catalogo del Menu Inicio
+# TTL del catalogo de aplicaciones. Es generoso porque el catalogo ya no
+# es solo el Menu Inicio: tambien levanta un PowerShell para ver las apps
+# de la Store y lee los manifiestos de Steam. Instalar algo nuevo tarda
+# como mucho esto en aparecer.
+app_cache_s      = 600
+index_store_apps = true      # apps empaquetadas (Store/UWP) via Get-StartApps
+index_steam      = true      # juegos instalados, via steamapps/*.acf
+defaults_cache_s = 300       # TTL de la lectura de apps predeterminadas
 max_scan         = 40000     # tope de archivos por busqueda
 search_engine    = "default" # default | google | bing | youtube | github | wikipedia
 allow_ocr        = false     # requiere tesseract instalado
@@ -149,6 +156,16 @@ fetch_timeout_s  = 12
 # forma de contacto entre parentesis (y bloquea los agentes que fingen ser
 # Chrome). Pon tu correo o la URL de tu repo.
 contact          = "https://github.com/topics/friday-desktop-companion"
+
+# Alias hablados -> como se llama la cosa en el catalogo. Cada valor puede
+# ser un nombre o una lista de candidatos: se prueban todos y gana el que
+# mejor puntue. Sirve igual para apps que para juegos.
+#
+# El codigo ya trae los obvios (`vscode`, `chrome`, `cs`...). Los TUYOS van
+# en `config/friday.local.toml`, que no se versiona — si no, cada alias que
+# añadas cuenta al mundo que tienes instalado.
+[system.app_aliases]
+navegador = ["brave", "google chrome", "microsoft edge", "firefox"]
 
 # ----------------------------------------------------------
 # NOTICIAS  —  fuentes RSS. FRIDAY no raspa portadas: lee
@@ -202,12 +219,32 @@ allow_web_fetch    = true     # que FRIDAY salga a la red por su cuenta
 allow_media        = true     # volumen y reproduccion
 allow_clipboard    = true     # leer y escribir el portapapeles
 allow_session      = false    # bloquear/suspender: apagado por defecto
+allow_agent        = true     # delegarle trabajo a un agente dentro de un repo
 confirm_over_files = 5        # sobre este numero, pide confirmacion hablada
 
 # Donde PUEDE escribir. Fuera de aqui, no.
 write_roots = ["~/Documents", "~/Downloads", "~/Desktop", "~/Pictures"]
 # Donde puede leer y buscar.
 read_roots  = ["~"]
+
+# Donde puede soltar un AGENTE (la skill `taller`). Lista aparte de
+# `write_roots` a proposito: que FRIDAY pueda guardar un briefing en
+# Documentos no significa que pueda ponerse a refactorizar ahi.
+#
+# Esta es la unica fuente de proyectos: lo que no este debajo de una de
+# estas rutas no existe para el taller, aunque lo nombres.
+#
+# **Vacia de fabrica, y asi debe quedarse aqui.** Este archivo es publico:
+# poner tus rutas es publicar la estructura de tu disco y el nombre de tus
+# proyectos. Las tuyas van en `config/friday.local.toml`, que no se
+# versiona, y se fusionan encima de esto:
+#
+#     [policy]
+#     agent_roots = ["~/proyectos", "~/trabajo/api-clientes"]
+#
+# NO pongas "~": tu perfil entero incluye AppData, y ademas dejaria al
+# agente ver cualquier cosa que tengas en el escritorio.
+agent_roots = []
 # Nunca se lanzan, aunque esten instalados.
 blocked_apps = ["regedit*", "diskpart*", "cmd.exe", "powershell*"]
 # Nunca se descargan. La red local ya esta bloqueada de fabrica.
@@ -258,7 +295,7 @@ volume    = 0.9
 # ----------------------------------------------------------
 [skills]
 enabled = ["metricas", "inbox", "plan", "vault", "agenda",
-           "sistema", "archivos", "pantalla", "ordenador",
+           "sistema", "archivos", "pantalla", "ordenador", "taller",
            "noticias", "web", "motor"]
 
 [skills.metricas]
@@ -298,6 +335,16 @@ log_reads = true             # cada lectura de pantalla queda anotada
 # La accion concreta la elige el motor contra el catalogo declarado en
 # skills/ordenador.py; aqui no hay nada que guionizar.
 
+# Encargarle trabajo a un agente dentro de un proyecto, hablando.
+# DONDE puede trabajar no se decide aqui sino en `[policy] agent_roots`:
+# los permisos viven con el guardia, no con la skill.
+[skills.taller]
+timeout_s   = 900            # un encargo puede tardar; el turno no espera
+max_turns   = 24             # tope de iteraciones del agente
+depth       = 2              # niveles de subcarpeta que se miran por raiz
+read_tools  = ["Read", "Glob", "Grep"]
+write_tools = ["Read", "Glob", "Grep", "Write", "Edit"]
+
 [skills.noticias]
 max_items = 12
 archive   = true             # deja el briefing en outputs/
@@ -305,6 +352,21 @@ write_to  = "outputs"
 
 [skills.web]
 max_chars = 12000
+
+# ----------------------------------------------------------
+# CONVERSACION  —  el hilo de los ultimos turnos.
+#
+# Vive en RAM y se pierde al cerrar: NO es memoria. La memoria de
+# FRIDAY es markdown y solo markdown, y lo que merece recordarse se
+# dice («recuerda que...») y acaba en el vault.
+#
+# Sirve para que «y eso cuanto cuesta» tenga a que referirse.
+# ----------------------------------------------------------
+[chat]
+max_turns        = 12        # turnos que se recuerdan (usuario + FRIDAY)
+max_chars        = 4000      # tope duro del hilo; recorta por lo mas viejo
+ttl_s            = 900       # sin hablar este rato, el hilo se corta solo
+speak_max_chars  = 700       # cuanto se dice en voz alta; el panel lleva todo
 
 # ----------------------------------------------------------
 # PRIVACIDAD  —  candados duros

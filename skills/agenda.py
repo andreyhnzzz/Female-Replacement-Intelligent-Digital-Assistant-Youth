@@ -11,6 +11,8 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta
 
+from core.engine import ask_json
+
 from .base import Skill, SkillContext, SkillResult
 
 PIPE_EVENT = re.compile(
@@ -120,8 +122,7 @@ class AgendaSkill(Skill):
             'Si NO agenda nada, responde exactamente: {"add": false}'
         )
         try:
-            data = ctx.engine.extract_json(
-                await ctx.engine.complete(prompt, system=ctx.cfg.persona())) or {}
+            data = await ask_json(ctx.engine, prompt) or {}
         except Exception:
             return None
         if not data.get("add") or not data.get("date"):

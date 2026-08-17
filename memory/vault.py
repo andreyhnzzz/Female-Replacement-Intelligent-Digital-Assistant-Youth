@@ -16,6 +16,17 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable
 
+# Palabras que aparecen en todas las notas y por tanto no distinguen ninguna.
+# La lista es corta a proposito: solo lo estructural del castellano hablado.
+# Recortarla de mas convertiria la busqueda en algo que falla en silencio.
+_VACIAS = frozenset("""
+que qué de la el los las un una unos unas y o pero si no me te se le lo nos
+en con por para del al es son era eran ser estar esta este esto estos estas
+ese esa eso mi tu su sus mis tus como cuando donde porque pues ya muy mas más
+hay ha he has han sobre entre desde hasta tambien también todo toda todos
+todas algo alguien nada cual cuales quien quienes yo tu él ella ellos ellas
+""".split())
+
 WIKILINK = re.compile(r"\[\[([^\]|#]+)(?:[#|][^\]]*)?\]\]")
 TAG = re.compile(r"(?<![\w/])#([A-Za-zÁÉÍÓÚÜÑáéíóúüñ][\w\-/]*)")
 FM_FENCE = re.compile(r"\A---\s*\n(.*?)\n---\s*\n?", re.S)
@@ -227,8 +238,18 @@ class Vault:
 
     # -- busqueda -----------------------------------------------------
     def search(self, query: str, limit: int = 12, zone: str | None = None) -> list[Note]:
-        """Escaneo directo con puntuacion. Sin indice externo: son solo archivos."""
-        terms = [t.lower() for t in re.split(r"\s+", query.strip()) if len(t) > 1]
+        """Escaneo directo con puntuacion. Sin indice externo: son solo archivos.
+
+        Las palabras vacias no puntuan. Parece un detalle de calidad y es un
+        problema de correccion: con «que», «los» y «una» contando, casi
+        cualquier nota coincidia con casi cualquier pregunta, y esas notas
+        acaban inyectadas como contexto en la conversacion libre. Un modelo
+        grande ignora el ruido; uno pequeño lo toma por bueno y responde
+        sobre una nota que no venia al caso. Devolver **nada** cuando no hay
+        coincidencia real es mejor que devolver lo primero que pegue.
+        """
+        terms = [t for t in (w.lower() for w in re.split(r"\s+", query.strip()))
+                 if len(t) > 1 and t not in _VACIAS]
         if not terms:
             return []
         hits: list[tuple[float, Note]] = []

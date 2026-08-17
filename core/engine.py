@@ -29,11 +29,21 @@ from typing import Any
 
 from .bus import BUS
 from .config import Config
+from .proc import NO_WINDOW
 
 
 # ---------------------------------------------------------------- base
 class Engine(ABC):
     name = "base"
+
+    # ¿Este adaptador sabe trabajar dentro de un repo — leer archivos,
+    # correr herramientas, iterar — o solo entra texto y sale texto?
+    #
+    # Es una capacidad, no una marca. Una skill puede preguntar «¿hay
+    # motor agentico?» sin preguntar «¿eres Claude?», que es lo que la
+    # regla 3 del CLAUDE.md prohibe. Si mañana otro backend sabe hacerlo,
+    # pone el flag y la skill no cambia.
+    agentic_capable = False
 
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -47,6 +57,27 @@ class Engine(ABC):
         return True, "ok"
 
     # -- helper compartido -------------------------------------------
+    @staticmethod
+    def _loosen(candidate: str) -> str:
+        """Repara la sintaxis que un modelo pequeño rompe mas a menudo.
+
+        No es tolerancia por gusto: un 8B que eligio la accion correcta no
+        puede perderla por una coma colgante. Tres arreglos, todos seguros
+        porque solo se aplican si el `json.loads` estricto ya fallo:
+
+        - comas antes de `}` o `]`
+        - comillas simples, cuando no hay ni una doble (`{'a': 'b'}`)
+        - literales de Python (`True`, `False`, `None`), que salen cuando el
+          modelo imita un dict en vez de un JSON
+        """
+        s = re.sub(r",\s*([}\]])", r"\1", candidate)
+        if '"' not in s and "'" in s:
+            s = s.replace("'", '"')
+        s = re.sub(r"(?<![\w\"'])(True|False|None)(?![\w\"'])",
+                   lambda m: {"True": "true", "False": "false",
+                              "None": "null"}[m.group(1)], s)
+        return s
+
     @staticmethod
     def extract_json(text: str) -> dict[str, Any] | None:
         """Saca el primer objeto JSON del texto, con o sin cerca de codigo."""
@@ -74,10 +105,13 @@ class Engine(ABC):
                             candidates.append(text[start:i + 1])
                             break
         for c in candidates:
-            try:
-                return json.loads(c)
-            except json.JSONDecodeError:
-                continue
+            for intento in (c, Engine._loosen(c)):
+                try:
+                    data = json.loads(intento)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(data, dict):
+                    return data
         return None
 
 
@@ -94,6 +128,10 @@ class ClaudeCodeEngine(Engine):
 
     - **agentico** (`agentic=True`): le devolvemos las herramientas y el cwd
       del proyecto. Para cuando de verdad quieres que trabaje en el repo.
+      El directorio, las herramientas y el modo de permisos van **por
+      llamada**, no por constructor: «metete en mi-proyecto» elige un cwd
+      distinto en cada frase, y una tarea de solo lectura no puede recibir
+      la misma caja de herramientas que una que arregla tests.
 
     El prompt viaja por **stdin**, no por argv: en Windows el shim .CMD de npm
     destroza los argumentos largos con saltos de linea y comillas.
@@ -104,6 +142,7 @@ class ClaudeCodeEngine(Engine):
     """
 
     name = "claude_code"
+    agentic_capable = True
 
     def __init__(self, cfg: Config):
         super().__init__(cfg)
@@ -140,13 +179,24 @@ class ClaudeCodeEngine(Engine):
             "--model", kw.get("model") or self.model,
         ]
 
+        cwd = self.cwd
         if agentic:
-            argv += ["--permission-mode", self.perm,
+            perm = str(kw.get("permission_mode") or self.perm)
+            # `bypassPermissions` no se acepta ni pidiendolo. Este motor lo
+            # dirige un STT que se equivoca; si una tarea necesita saltarse
+            # los permisos, la respuesta correcta es que la hagas tu en la
+            # terminal. Que el toml pueda pedirlo no lo hace legitimo.
+            if perm == "bypassPermissions":
+                perm = "acceptEdits"
+            tools = kw.get("tools") or self.tools
+
+            argv += ["--permission-mode", perm,
                      "--max-turns", str(kw.get("max_turns", self.max_turns))]
-            if self.tools:
-                argv += ["--allowed-tools", ",".join(self.tools)]
+            if tools:
+                argv += ["--allowed-tools", ",".join(tools)]
             if system:
                 argv += ["--append-system-prompt", system]
+            cwd = str(kw.get("cwd") or self.cwd)
         else:
             # motor puro: sin herramientas, sin contexto de repo
             argv += ["--tools", "",
@@ -157,16 +207,20 @@ class ClaudeCodeEngine(Engine):
 
         env = {**os.environ, "CLAUDE_CODE_NONINTERACTIVE": "1"}
         proc = await asyncio.create_subprocess_exec(
-            *argv, cwd=self.cwd, env=env,
+            *argv, cwd=cwd, env=env,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            creationflags=NO_WINDOW,      # sin consola: ver core/proc.py
         )
+        # Un encargo agentico puede tardar minutos; un turno hablado, no.
+        # Por eso el tope viaja en la llamada y no solo en el constructor.
+        timeout = float(kw.get("timeout") or self.timeout)
         try:
             out, err = await asyncio.wait_for(
-                proc.communicate(input=prompt.encode("utf-8")), timeout=self.timeout)
+                proc.communicate(input=prompt.encode("utf-8")), timeout=timeout)
         except asyncio.TimeoutError:
             proc.kill()
-            raise RuntimeError(f"El motor no respondio en {self.timeout:.0f}s.")
+            raise RuntimeError(f"El motor no respondio en {timeout:.0f}s.")
 
         text = out.decode("utf-8", "replace").strip()
         if proc.returncode != 0 and not text:
@@ -185,7 +239,8 @@ class ClaudeCodeEngine(Engine):
         try:
             argv = self._resolve_binary() + ["--version"]
             proc = await asyncio.create_subprocess_exec(
-                *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+                *argv, stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL, creationflags=NO_WINDOW)
             out, _ = await asyncio.wait_for(proc.communicate(), timeout=20)
             return proc.returncode == 0, out.decode().strip() or "claude code"
         except Exception as exc:
@@ -283,13 +338,21 @@ class OllamaEngine(Engine):
 
     async def complete(self, prompt: str, system: str = "", **kw: Any) -> str:
         import aiohttp
-        payload = {
+        payload: dict[str, Any] = {
             "model": kw.get("model") or self.model,
             "prompt": prompt,
             "system": system,
             "stream": False,
             "options": {"temperature": kw.get("temperature", 0.3)},
         }
+        # Ollama sabe forzar JSON valido a nivel de decodificacion, y con un
+        # esquema puede acotar hasta los valores. Es la diferencia entre
+        # pedirle amablemente a un 8B que no se invente una accion y que no
+        # pueda hacerlo: gramatica, no buenos modales.
+        if kw.get("json_schema"):
+            payload["format"] = kw["json_schema"]
+        elif kw.get("json_mode"):
+            payload["format"] = "json"
         timeout = aiohttp.ClientTimeout(total=self.timeout)
         async with aiohttp.ClientSession(timeout=timeout) as s:
             async with s.post(f"{self.host}/api/generate", json=payload) as r:
@@ -340,8 +403,18 @@ class OpenAICompatEngine(Engine):
         import aiohttp
         msgs = ([{"role": "system", "content": system}] if system else []) + \
                [{"role": "user", "content": prompt}]
-        payload = {"model": kw.get("model") or self.model, "messages": msgs,
-                   "temperature": kw.get("temperature", 0.3), "stream": False}
+        payload: dict[str, Any] = {
+            "model": kw.get("model") or self.model, "messages": msgs,
+            "temperature": kw.get("temperature", 0.3), "stream": False}
+        # El equivalente en el dialecto de OpenAI. Lo soportan llama.cpp,
+        # LM Studio, vLLM y los proveedores en nube.
+        if kw.get("json_schema"):
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {"name": "respuesta", "strict": True,
+                                "schema": kw["json_schema"]}}
+        elif kw.get("json_mode"):
+            payload["response_format"] = {"type": "json_object"}
         headers = {"Authorization": f"Bearer {self.key}"}
         timeout = aiohttp.ClientTimeout(total=self.timeout)
         async with aiohttp.ClientSession(timeout=timeout, headers=headers) as s:
@@ -362,6 +435,93 @@ class OpenAICompatEngine(Engine):
             return True, str(data.get("data", [{}])[0].get("id", "local"))
         except Exception as exc:
             return False, str(exc)[:120]
+
+
+# ══════════════════════════════════════════ pedir JSON, sin rezar
+# El system prompt de una llamada con contrato. Es DELIBERADAMENTE seco: la
+# persona (`config/persona.md`) define el tono, y un tono no cabe dentro de
+# un JSON. Mandar cuatro kilobytes de carácter en una llamada que solo tiene
+# que devolver `{"accion": ...}` es lo que hace que un 8B se ponga a hablar
+# en personaje en vez de contestar — y ahi el modelo no fallo, fallamos
+# nosotros pidiendole dos cosas incompatibles a la vez.
+JSON_SYSTEM = (
+    "Devuelves UNICAMENTE un objeto JSON valido con las claves que te piden. "
+    "Sin prosa antes ni despues, sin cerca de codigo, sin explicar nada, sin "
+    "claves de mas. Si un dato no lo sabes, pon el valor vacio, pero devuelve "
+    "el objeto completo."
+)
+
+
+def enum_schema(campos: dict[str, Any],
+                requeridos: list[str] | None = None) -> dict[str, Any]:
+    """Atajo para el esquema mas util: un objeto con claves acotadas.
+
+        enum_schema({"accion": ["subir", "bajar"], "args": "object"},
+                    requeridos=["accion"])
+
+    Un valor lista se vuelve un `enum`; una cadena, un tipo suelto.
+
+    **Cuidado con lo que marcas como requerido.** Un campo obligatorio no se
+    lo piensa mas el modelo: se lo inventa. Medido con `llama3.1:8b`: al
+    exigir `confianza`, la rellenaba con `0` en cada respuesta — y un cero
+    debajo del umbral tira la accion aunque estuviera bien elegida. Requiere
+    lo que necesitas para actuar; deja opcional lo que solo es una señal.
+    """
+    props: dict[str, Any] = {}
+    for clave, valor in campos.items():
+        if isinstance(valor, (list, tuple)):
+            props[clave] = {"type": "string", "enum": list(valor)}
+        else:
+            props[clave] = {"type": str(valor)}
+    return {"type": "object", "properties": props,
+            "required": list(campos) if requeridos is None else list(requeridos)}
+
+
+async def ask_json(engine: "Engine", prompt: str, system: str = "",
+                   schema: dict[str, Any] | None = None,
+                   repair: bool = True) -> dict[str, Any] | None:
+    """Pide un objeto JSON y devuelve el dict, o None.
+
+    Un solo sitio que concentra lo que hace falta para que un contrato
+    aguante con un modelo pequeño:
+
+      1. **Modo JSON del backend** cuando existe (`format` en Ollama,
+         `response_format` en el dialecto de OpenAI). Deja de ser una
+         peticion educada y pasa a ser gramatica.
+      2. **`schema`, cuando la respuesta debe salir de una lista cerrada.**
+         Es el paso que de verdad cambia las cosas con un 8B: con un `enum`
+         el decodificador **no puede** emitir un nombre que no este en la
+         lista. Medido con `llama3.1:8b`: sin esquema se inventaba la accion
+         `"pausa"` (que no existe en el catalogo) copiando la palabra del
+         usuario. La lista blanca deja de ser solo un filtro de despues y
+         pasa a ser tambien una restriccion de antes.
+      3. **Temperatura 0.** No hay nada creativo que aportar en un contrato.
+      4. **Sin persona.** Ver `JSON_SYSTEM`.
+      5. **Una segunda pasada** si aun asi no hubo JSON: se le devuelve su
+         propia salida y se le pide solo el objeto. Cuesta una llamada de
+         mas, pero solo cuando ya ibamos a perder el turno entero.
+
+    El esquema es una **pista, no una garantia**: los backends que no lo
+    soportan lo ignoran. Por eso la validacion de despues no se toca — sigue
+    haciendo falta, y sigue siendo la que manda.
+    """
+    raw = await engine.complete(
+        prompt,
+        system=(JSON_SYSTEM + ("\n\n" + system if system else "")),
+        json_mode=True, json_schema=schema, temperature=0.0)
+
+    data = Engine.extract_json(raw)
+    if data is not None or not repair or not (raw or "").strip():
+        return data
+
+    try:
+        rescate = await engine.complete(
+            "Extrae el objeto JSON que hay en este texto y devuelvelo solo, "
+            "sin nada mas:\n\n" + raw[:2000],
+            system=JSON_SYSTEM, json_mode=True, temperature=0.0)
+    except Exception:
+        return None
+    return Engine.extract_json(rescate)
 
 
 ENGINES: dict[str, type[Engine]] = {
@@ -509,6 +669,37 @@ class EngineSwitch(Engine):
 
     def available(self) -> list[ModelSpec]:
         return list(self.roster)
+
+    # ── capacidad agentica ────────────────────────────────────────
+    @property
+    def agentic_capable(self) -> bool:                # type: ignore[override]
+        return bool(getattr(self.current, "agentic_capable", False))
+
+    def agentic_spec(self) -> ModelSpec | None:
+        """Que modelo del roster puede trabajar dentro de un repo.
+
+        El activo si sabe; si no, el primero que sepa. Devolverlo en vez de
+        conmutar es deliberado: que le encargues una revision a un repo no
+        deberia cambiarte el modelo con el que estabas conversando. La
+        skill usa este spec para esa llamada y solo para esa.
+        """
+        if self._spec is not None and \
+                getattr(ENGINES.get(self._spec.backend), "agentic_capable", False):
+            return self._spec
+        for spec in self.roster:
+            if getattr(ENGINES.get(spec.backend), "agentic_capable", False):
+                return spec
+        return None
+
+    async def complete_agentic(self, prompt: str, system: str = "",
+                               spec: ModelSpec | None = None, **kw: Any) -> str:
+        """Encargo dentro de un repo, con el modelo que sepa hacerlo."""
+        spec = spec or self.agentic_spec()
+        if spec is None:
+            raise RuntimeError("Ningun modelo del roster sabe trabajar en un repo.")
+        engine = self._engine_for(spec.backend)
+        return await engine.complete(prompt, system=system, agentic=True,
+                                     model=spec.model, **kw)
 
     # ── cambiar ───────────────────────────────────────────────────
     async def switch(self, spec: ModelSpec) -> tuple[bool, str]:

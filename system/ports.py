@@ -29,6 +29,23 @@ class AppInfo:
 
 
 @dataclass(frozen=True, slots=True)
+class DefaultApp:
+    """Lo que el usuario eligio para abrir algo: un esquema, un tipo.
+
+    `path` vacio no invalida la entrada: significa que sabemos QUE app es
+    pero no donde vive, y entonces hay que dejarsela al shell.
+    """
+    name: str
+    progid: str = ""
+    command: str = ""
+    path: str = ""                   # ejecutable resuelto
+
+    @property
+    def launchable(self) -> bool:
+        return bool(self.path)
+
+
+@dataclass(frozen=True, slots=True)
 class WindowInfo:
     handle: int
     title: str
@@ -164,6 +181,19 @@ class WindowReader(Protocol):
 
     def list_windows(self) -> list[WindowInfo]: ...
     def active(self) -> WindowInfo | None: ...
+
+
+@runtime_checkable
+class DefaultApps(Protocol):
+    """Que aplicacion abre que cosa, segun el usuario. Solo lee.
+
+    Es puerto propio y no un metodo de `AppCatalog` porque responde otra
+    pregunta: el catalogo dice que hay **instalado**, esto dice que esta
+    **elegido**. Brave puede estar instalado sin ser el predeterminado.
+    """
+
+    def browser(self) -> DefaultApp | None: ...
+    def for_scheme(self, scheme: str) -> DefaultApp | None: ...
 
 
 @runtime_checkable
@@ -303,6 +333,7 @@ class SystemAccess:
     plataforma, la skill lo detecta y lo dice, en vez de reventar.
     """
     apps: AppCatalog | None = None
+    defaults: DefaultApps | None = None
     launcher: AppLauncher | None = None
     windows: WindowReader | None = None
     window_ctl: WindowController | None = None

@@ -139,6 +139,31 @@ class Friday:
             if self.args.console or self.args.say:
                 print(f"\n\033[38;5;214m{res.display or res.speak}\033[0m\n")
 
+    async def _on_say(self, ev) -> None:
+        """Algo terminado en segundo plano quiere hablar.
+
+        Un encargo al taller tarda minutos: cuando acaba, el turno que lo
+        pidio hace rato que se cerro. Vuelve por aqui en vez de por el
+        camino normal, y se serializa con el mismo candado para no hablar
+        encima de una peticion en curso.
+        """
+        text = str(ev.data.get("text", "")).strip()
+        if not text:
+            return
+        async with self._busy:
+            await self.bus.emit("skill.result",
+                                skill=str(ev.data.get("skill", "fondo")),
+                                speak=text,
+                                display=str(ev.data.get("display", "") or text),
+                                writes=[], ok=True, error="", ms=0, pending="")
+            if self.tts:
+                await self.bus.emit("tts.speaking", backend=self.tts.backend)
+                self.tts.say(text)
+                await asyncio.to_thread(self.tts.wait_until_idle, 180.0)
+                await self.bus.emit("tts.done")
+            if self.args.console or self.args.say:
+                print(f"\n\033[38;5;214m{ev.data.get('display') or text}\033[0m\n")
+
     # ══════════════════════════════════════════ voz
     def _on_utterance(self, audio, duration: float) -> None:
         """Corre en el hilo del PTT. Sella la red mientras transcribe."""
@@ -221,6 +246,10 @@ class Friday:
         # si fallo el modelo, el hotkey o el microfono.
         self.logbook = Logbook(self.bus, self.cfg.root / "logs" / "friday.log",
                                echo=bool(self.args.console or self.args.verbose))
+
+        # El trabajo que vuelve tarde necesita boca: sin esto, un encargo al
+        # taller termina en la bitacora y en ningun sitio mas.
+        self.bus.on("core.say", self._on_say)
 
         if self.cfg.get("privacy.local_only_audio", True):
             privacy.install(

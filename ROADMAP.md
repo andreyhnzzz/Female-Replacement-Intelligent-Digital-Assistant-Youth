@@ -9,83 +9,6 @@ Cuando algo se cierre, se borra de aquí y se documenta en el `README.md`.
 
 ## Prioridad alta
 
-### ☐ Encargarle trabajo a Claude Code por voz
-
-*"Métete en `mi-proyecto` y revisa por qué fallan los tests"*, y que lo haga.
-La terminal, pero hablando.
-
-**Lo que YA existe:** `ClaudeCodeEngine.complete()` acepta `agentic=True` y en
-ese modo devuelve las herramientas (`--allowed-tools`) y el modo de permisos
-(`--permission-mode`) en vez de correr como LLM puro. Está escrito y
-documentado desde el principio.
-
-**Lo que falta:**
-
-1. **Nadie lo llama.** `agentic=True` no aparece en ninguna skill; hoy es
-   código muerto. Hace falta una skill `taller` (o similar) que lo invoque.
-2. **El directorio está fijo.** `self.cwd = str(cfg.root)` se decide al
-   construir el motor, así que todo correría dentro del repo de FRIDAY. Para
-   *"métete en X"* hace falta pasar el `cwd` **por llamada**, no por
-   constructor.
-3. **Resolver el directorio hablado.** *"mi proyecto"* → una ruta real. El
-   puerto `FileIndex` ya sabe buscar; hará falta una lista de raíces de
-   trabajo en el toml (`[taller] roots`) para no ponerse a adivinar por todo
-   el disco.
-4. **Devolver el trabajo.** Claude Code en modo agéntico puede tardar
-   minutos. La respuesta hablada tiene que ser *"voy con ello"* y el
-   resultado llegar después por el bus, no bloquear el turno.
-
-**Lo que hay que pensar antes de escribir una línea.** Esto es un agente con
-permiso de escritura, dirigido por un STT que se equivoca — mira la bitácora:
-*"desactivar el Bluetooth"* llegó como *"Desactual Bluetooth"*. Un
-*"borra los temporales"* mal transcrito dentro de un repo real es una tarde
-perdida. Como mínimo:
-
-- **Raíces declaradas.** Solo directorios de una lista blanca del toml.
-  Fuera de ahí, no. Reutilizar el criterio de `policy.write_roots`.
-- **Confirmación hablada siempre**, repitiendo *qué* tarea y *en qué ruta*,
-  antes de lanzar. La infraestructura de `PendingAction` ya está.
-- **Tareas de solo lectura sin confirmar, las que escriben con confirmación.**
-  «Revisa», «explica» y «busca» no son lo mismo que «arregla» o «refactoriza».
-- **Nunca `--permission-mode bypassPermissions`.** Si la tarea necesita eso,
-  la respuesta correcta es que la hagas tú en la terminal.
-- Que el repo esté limpio (`git status`) antes de dejar que escriba, o
-  avisar de que hay cambios sin commitear que podría pisar.
-
-### ☐ Juegos de Steam y aplicaciones de Microsoft Store
-
-**Comprobado en la máquina el 16/08/2026, y parte de esto ya funciona:**
-
-| Petición | Hoy |
-|---|---|
-| *"abre Brave"* | ✅ funciona — `Brave.lnk` está en el Menú Inicio |
-| *"abre Steam"* | ✅ funciona — el cliente sí está |
-| *"abre Geometry Dash"* | ❌ ninguno de los 8 juegos instalados aparece |
-| *"abre Spotify"* | ❌ sin coincidencia (no deja `.lnk` en el Menú Inicio) |
-| *"abre vscode"* | ❌ solo responde a `code` |
-
-**La causa:** `WindowsAppCatalog.refresh()` construye el catálogo con
-`rglob("*.lnk")` sobre el Menú Inicio. Los juegos de Steam no ponen accesos
-directos ahí, y las apps empaquetadas (Store/UWP) tampoco.
-
-**Juegos de Steam.** Están en `steamapps/appmanifest_*.acf`, un VDF plano con
-`"appid"` y `"name"` — se parsea con una regex, sin dependencias. Se lanzan
-con `steam://rungameid/<appid>`, que `os.startfile` ya abre porque es un URI
-y el lanzador contempla `kind="uri"`. Ojo: puede haber **varias bibliotecas**;
-las rutas están en `steamapps/libraryfolders.vdf`, no asumas una sola.
-
-**Apps de Store/UWP.** `Get-StartApps` (PowerShell) devuelve `Name` + `AppID`
-de *todo* lo que el usuario ve en el menú, incluidas las empaquetadas, y se
-lanzan con `shell:AppsFolder\<AppID>`. Es una fuente más completa que globear
-`.lnk`. El coste es levantar PowerShell una vez por refresco — aceptable
-porque el catálogo se cachea (TTL de `[system] app_cache_s`).
-
-**Alias.** `vscode`→`code`, `vs code`, `chrome`→`google chrome`. Una tabla de
-sinónimos en el toml antes que tocar `_score()`.
-
-**Dónde va:** todo en `system/win32/apps.py`. No hace falta puerto nuevo ni
-cambiar `AppCatalog`: son fuentes adicionales dentro de `refresh()`.
-
 ### ☐ Controles de sistema: Bluetooth, wifi, brillo
 
 **De dónde sale:** sesión del 16/08/2026. Se le pidió dos veces *"desactivar
@@ -143,6 +66,57 @@ sigue ganando cuando nadie más compite.
 **Dónde va:** `skills/metricas.py::triggers`. Fijar el caso en
 `scripts/smoke_test.py` junto a los otros pares que se pisan a propósito.
 
+**Ojo, no lo arregla el seguimiento de conversación.** Ese paso resuelve el
+caso hermano (*"y eso cuánto cuesta"* → `metricas`) porque la frase lleva
+anáfora y no se sostiene sola. Esta no: *"se me cayó el servidor"* es una
+frase entera y perfectamente autónoma que simplemente contiene una palabra
+del dominio de `metricas`. Sigue siendo un problema de disparadores.
+
+### ☐ Latencia de Claude: una instancia viva en vez de un proceso por turno
+
+**Medido el 17/08/2026 en la máquina de referencia:**
+
+| | |
+|---|---|
+| arrancar el binario `claude --version` | **0,2 s** |
+| turno corto completo por `claude_code` (Haiku o Sonnet) | **3,3-3,7 s** |
+| turno corto por Ollama local (HTTP, sin proceso) | **0,3-0,6 s** |
+
+Lo importante: **el arranque del proceso son 200 ms, no los 3 s**. El resto
+es la inicialización de Claude Code más la ida y vuelta a la API. Así que
+mantener una instancia viva recupera bastante menos de lo que parece.
+
+**Dos caminos, y el barato es el que no se ha probado:**
+
+1. **`anthropic_api`** — ya está implementado y en el roster (`di «directo»`).
+   Es HTTP puro: elimina el proceso y la inicialización de golpe, y solo
+   queda la latencia de red. Necesita `ANTHROPIC_API_KEY`, que hoy no está
+   configurada, así que **no se ha podido medir**. Es lo primero que hay que
+   probar antes de escribir nada.
+2. **Un adaptador de sesión persistente** — `claude` admite
+   `--input-format stream-json --output-format stream-json`, que deja un
+   proceso vivo atendiendo varios mensajes. El problema no es técnico sino
+   de diseño: cada llamada de FRIDAY declara su propio formato y es
+   deliberadamente **sin estado**, mientras que una sesión persistente
+   acumula contexto — el contrato JSON de una skill se filtraría al turno de
+   la siguiente. Haría falta reiniciar la sesión entre llamadas, que es
+   justo lo que se quería evitar.
+
+### ☐ Modelo local: cerrar el hueco que queda
+
+Con `llama3.1:8b` sobre Ollama, la elección de acción del catálogo va 12/12,
+igual que Sonnet (ver el README). Lo que sigue abierto:
+
+- **Las skills de prosa no se han medido con el 8B**: `inbox`, `plan`,
+  `noticias`, `pantalla` y `web` piden markdown, no JSON, y ahí el contrato
+  es más laxo pero la calidad de redacción es lo que más se nota. Falta una
+  pasada de las suyas.
+- **`_freeform` con notas del vault**: aun con las palabras vacías fuera, un
+  8B se apoya más de la cuenta en el contexto inyectado. Convendría exigir
+  una puntuación mínima, no solo que haya coincidencia.
+- **Modelos más pequeños que 8B** no se han probado. El 3B es donde se vería
+  si los prompts aguantan de verdad o solo aguantan con este.
+
 ### ☐ Instalar la voz de Piper
 
 `[voice.tts] engine = "piper"` está configurado, pero no hay ningún `.onnx` en
@@ -177,6 +151,8 @@ sabiendas y no por creer que se olvidaron.
   implementarlos para X11/Wayland no debería tocar ni una skill. Es la prueba
   de fuego de que la inversión de dependencias vale de algo.
 - **Piper en streaming** — sintetizar por frases y empezar a hablar antes de
-  tener el audio entero. Con respuestas largas se nota la espera.
-- **Historial de conversación** — hoy cada petición es independiente. Un
-  "y eso cuánto cuesta" después de una respuesta no tiene a qué referirse.
+  tener el audio entero. Con respuestas largas se nota la espera, y ahora que
+  FRIDAY conversa las respuestas son más largas que antes.
+- **Encargos al taller en paralelo** — hoy corren a la vez si los lanzas
+  seguidos, pero nada los enumera ni los cancela. Falta un *"¿cómo va lo de
+  mi-proyecto?"* y un *"déjalo"*.
