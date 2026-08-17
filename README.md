@@ -12,6 +12,7 @@
   <img src="https://img.shields.io/badge/Windows-11-0078D6?style=for-the-badge&logo=windows11&logoColor=white" alt="Windows 11">
   <img src="https://img.shields.io/badge/Motor-Claude-CC785C?style=for-the-badge&logo=anthropic&logoColor=white" alt="Claude">
   <img src="https://img.shields.io/badge/Voz-100%25_local-2EA043?style=for-the-badge&logo=shieldsdotio&logoColor=white" alt="Voz 100% local">
+  <img src="https://img.shields.io/badge/Licencia-MIT-FFB300?style=for-the-badge&logo=opensourceinitiative&logoColor=white" alt="Licencia MIT">
 </p>
 
 </div>
@@ -518,6 +519,22 @@ Lo pendiente, lo decidido a conciencia y lo de algún día está en
   ya se abren; los juegos y las apps empaquetadas no aparecen en el catálogo.
 - **Bluetooth, wifi y brillo**, y que cuando no sepa hacer algo lo diga por su
   nombre en vez de un genérico *"no me quedó claro"*.
+
+---
+
+## 📄 Licencia
+
+**[MIT](LICENSE)** — © 2026 andreyhnzzz. Úsalo, cópialo, modifícalo y véndelo
+si quieres; solo conserva el aviso de copyright. Sin garantía de ningún tipo.
+
+Las dependencias mantienen la suya, y dos importan: **PySide6 y pynput son
+LGPLv3**. Con el proyecto tal cual no añade ninguna carga —Python las importa
+en tiempo de ejecución y cualquiera puede reemplazarlas en su `.venv`—, pero
+sí la añadiría un bundle que las lleve dentro. El detalle está en
+**[NOTICE.md](NOTICE.md)**.
+
+F.R.I.D.A.Y es un nombre y un personaje de Marvel. Esto es un proyecto
+personal sin afiliación ni respaldo de Marvel ni Disney.
 
 ---
 
