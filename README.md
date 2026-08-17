@@ -60,11 +60,18 @@ oye se queda en tu equipo.
 
 ```powershell
 .\scripts\setup.ps1              # venv + dependencias + modelo de voz (una vez)
+.\scripts\build_exe.ps1          # FRIDAY.exe para arrancar con doble clic (opcional)
 .\scripts\run.ps1                # acompañante + voz
 ```
 
 **Pulsa F9, habla, pulsa F9 otra vez.** El núcleo aparece en la esquina, el
 icono queda en la bandeja del sistema.
+
+`build_exe.ps1` deja un **FRIDAY.exe** de 82 KB en la raíz: doble clic y
+arranca sin ventana de consola, listo para anclar a la barra de tareas. Es un
+*lanzador*, no un instalador — necesita el repo y su `.venv` al lado, y por eso
+no se versiona. Dentro no lleva ni una línea de tus datos: solo una ruta
+relativa al intérprete, verificable con `strings`.
 
 | Comando | Qué hace |
 |---|---|

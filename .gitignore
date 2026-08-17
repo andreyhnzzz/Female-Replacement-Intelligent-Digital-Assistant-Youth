@@ -7,6 +7,17 @@ __pycache__/
 logs/*
 !logs/.gitkeep
 
+# ── Artefactos de compilacion ───────────────────────────────────
+# El lanzador y su icono se generan en dos segundos con
+# scripts\build_exe.ps1, que si se versiona. Fuera del repo porque:
+#   - son derivados; la fuente de verdad es el .ps1
+#   - un .exe sin firmar en un repo publico dispara SmartScreen y
+#     parece lo que no es
+#   - no sirven de nada sin un .venv al lado, asi que quien clone tiene
+#     que correr setup.ps1 igualmente
+FRIDAY.exe
+desktop/friday.ico
+
 # Modelos de voz: pesados y se bajan solos con setup.ps1
 models/piper/*.onnx
 models/piper/*.json
