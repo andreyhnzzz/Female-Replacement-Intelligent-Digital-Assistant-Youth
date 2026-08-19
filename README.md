@@ -111,20 +111,31 @@ los nodos cercanos son mayores que los lejanos, y el brillo se derrama sobre
 lo que tiene alrededor. Oro y ámbar sobre fondo profundo, con desenfoque de
 campo que ancla el objeto en el espacio.
 
-Cuatro capas, de dentro afuera: **núcleo** incandescente · **radios** que salen
-de él · **armazón** de meridianos y paralelos · **nodos**, la nube de puntos.
+Cinco capas, de dentro afuera: **núcleo** incandescente · **radios** que salen
+de él · **armazón** de meridianos y paralelos · **nodos**, la nube de puntos ·
+**picos**, las agujas del pensamiento.
 
 Y los nodos **reaccionan**. No cambian de color: al pensar se agitan de verdad,
 se separan de su posición de reposo y hierven; escuchar los hace respirar con
 tu voz; un error los vira a rojo. Es la diferencia entre un adorno y un
 indicador.
 
+Los **picos** dicen lo que la agitación no puede: *cuánto*. La nube hierve
+igual en un turno de dos segundos que en un encargo de cuatro minutos, así que
+cada tramo de espera cumplido saca una aguja del globo, y el tiempo acumulado
+las alarga. Una respuesta rápida no dibuja ninguna; algo que se está haciendo
+largo se ve erizado sin leer una palabra. Siguen contando mientras el taller
+trabaja en segundo plano, que es justo cuando el panel parecía dormido.
+
 ```toml
 [desktop.core]
-mode        = "quick3d"   # quick3d | projected
-nodes       = 1400        # 600 en equipos justos
-bloom       = true
-depth_field = true
+mode            = "quick3d"   # quick3d | projected
+nodes           = 1400        # 600 en equipos justos
+bloom           = true
+depth_field     = true
+thought_nodes   = true        # los picos de pensamiento
+thought_every_s = 2.5         # segundos de espera por aguja
+thought_max     = 14
 ```
 
 Si QtQuick3D falta o el driver se atraganta, cae solo al núcleo 2.5D. Nunca te
@@ -134,7 +145,7 @@ Arrástralo desde el núcleo. Clic derecho para el menú, doble clic para escrib
 
 ---
 
-## 🧠 Las 13 skills
+## 🧠 Las 14 skills
 
 FRIDAY enruta sola. No hay que invocarlas por nombre.
 
@@ -164,6 +175,7 @@ FRIDAY enruta sola. No hay que invocarlas por nombre.
 | **plan** | *"arma el plan"* · *"por dónde empiezo"* |
 | **inbox** | *"buenos días"* · *"ponme al día"* |
 | **metricas** | *"dame las métricas"* |
+| **memoria** | *"consolida la memoria"* · *"cuánto ocupa la memoria"* |
 
 ### 🔀 Sobre sí misma
 
@@ -473,6 +485,7 @@ allow_media        = true         # volumen y reproducción
 allow_clipboard    = true         # leer y escribir el portapapeles
 allow_session      = false        # bloquear/suspender: apagado por defecto
 allow_agent        = true         # delegar trabajo en un repo (skill `taller`)
+allow_memory_prune = true         # retirar diarias ya resumidas (solo del vault)
 confirm_over_files = 5            # sobre esto, pide confirmación hablada
 write_roots  = ["~/Documents", "~/Downloads", "~/Desktop", "~/Pictures"]
 agent_roots  = []                    # dónde puede soltar un agente (vacía = apagado)
@@ -547,7 +560,8 @@ siguen ahí y las abre cualquier editor de texto.
 vault/
 ├── raw/        captura cruda — nota diaria, transcripciones de voz
 ├── wiki/       notas atómicas enlazadas con [[wikilinks]] → el grafo
-└── outputs/    lo que FRIDAY produce — Briefing, Plan, Noticias, resúmenes
+├── outputs/    lo que FRIDAY produce — Briefing, Plan, Noticias, resúmenes
+└── .trash/     lo ya resumido, a la espera de caducar
 ```
 
 **Obsidian:** *Open folder as vault* → elige `vault/`. El grafo aparece solo,
@@ -555,6 +569,44 @@ sin plugins. Ya viene configurado con acento ámbar y colores por zona.
 
 Di **"reparar grafo"** y crea stubs para todo enlace roto: la memoria se cierra
 sola.
+
+### Y se poda sola
+
+Cada día hablado deja una nota en `raw/`, y casi todas sus líneas caducan al
+cumplirse: *«abre Spotify»*, *«sube el volumen»*, *«qué hora es»*. A los seis
+meses son cientos de archivos que no recuerdan nada — y como aquí no hay
+índice, **cada búsqueda los abre todos**. Crecer así no es solo ocupar disco:
+es ir volviéndose lenta.
+
+Cada 12 h, las diarias de más de 14 días se funden en una sola nota con lo que
+seguiría importando dentro de seis meses, y los originales se retiran:
+
+```
+raw/2026-07-01.md ┐
+raw/2026-07-02.md ├─► raw/Memoria consolidada.md   ── lo esencial
+        …         │
+raw/2026-07-14.md ┘   vault/.trash/                ── los originales, 30 días
+```
+
+Lo que se queda fuera es lo que se agotó al cumplirse; lo que dijiste para ser
+recordado (*«recuerda que…»*) y lo que tiene fecha no se filtra nunca. Y solo
+se tocan las notas diarias: `wiki/` y `outputs/` son tuyas y no se resumen.
+
+Nada se retira antes de comprobar que el resumen está escrito en disco, y los
+originales no se borran: se apartan un mes por si quieres compararlos. Pídelo
+cuando quieras con **"consolida la memoria"**, o mira cómo va con **"cuánto
+ocupa la memoria"**.
+
+```toml
+[vault.consolidate]
+enabled    = true
+every_h    = 12      # cada cuánto lo revisa sola
+keep_days  = 14      # las diarias más nuevas no se tocan
+trash_days = 30      # cuánto sobrevive el original apartado
+
+[policy]
+allow_memory_prune = true   # apágalo y resume, pero no retira nada
+```
 
 ---
 
@@ -670,8 +722,8 @@ conversación no deja ninguna referencia colgando.
 ## 🧪 Pruebas
 
 ```powershell
-.\.venv\Scripts\python scripts\smoke_test.py     # 62 · memoria, skills, enrutado, conversación
-.\.venv\Scripts\python scripts\system_test.py    # 117 · política, puertos, red, motor, taller, PTT
+.\.venv\Scripts\python scripts\smoke_test.py     # 101 · memoria, consolidación, skills, enrutado
+.\.venv\Scripts\python scripts\system_test.py    # 135 · política, puertos, red, motor, taller, PTT
 ```
 
 Sobre directorios temporales, motor simulado y feeds sintéticos: no tocan tu
@@ -682,6 +734,7 @@ El HUD se revisa mirándolo, no leyéndolo:
 
 ```powershell
 .\.venv\Scripts\python scripts\ui_preview.py thinking --shot nucleo.png
+.\.venv\Scripts\python scripts\ui_preview.py thinking --picos 14 --shot erizado.png
 ```
 
 ---

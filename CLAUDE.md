@@ -7,7 +7,10 @@ Python 3.12, asyncio + Qt/QML + QtQuick3D. Corre local. **No es una app web.**
 
 1. **La memoria es markdown y nada más.** Nunca propongas SQLite, Chroma ni un
    índice persistente. Lo que necesite ser rápido se cachea en RAM y se
-   reconstruye leyendo archivos.
+   reconstruye leyendo archivos. Que no haya índice es lo que hace que el
+   **número de archivos** sea el coste dominante de cada lectura, y por eso
+   la memoria se consolida sola (ver abajo): la respuesta a «esto crece» no
+   es una base de datos, es tirar lo que no había que recordar.
 2. **El audio no sale del equipo.** No agregues clientes HTTP a `voice/`.
    `core/privacy.py` bloquea sockets no-loopback durante el pipeline de audio.
    La red vive en `system/net.py`, y solo ahí.
@@ -41,7 +44,9 @@ voice/ptt.py --(hilo)--> voice/stt.py --> friday.py::handle
                                +-- trabajo de fondo (skills/taller.py) --> core.say --> friday.py
 ```
 
-`friday.py` es el único que conoce a todos. Es a propósito.
+`friday.py` es el único que conoce a todos. Es a propósito. También sostiene
+el **ama de llaves** (`_memory_keeper`), que consolida el diario viejo cada
+tantas horas bajo el mismo candado que un turno.
 
 El trabajo que tarda minutos vuelve por `core.say`, no por el turno: quien lo
 emita habla, aunque el turno que lo pidio se cerrara hace rato.
@@ -103,6 +108,58 @@ skills. Pedir JSON para conversar encoge las respuestas a una frase de tramite
 y con un 8B rompe el formato cada tanto. La voz corta por frases enteras
 (`_for_voice`); el panel recibe todo.
 
+## La memoria se poda sola: `memory/consolidate.py`
+
+Cada día hablado deja una nota en `raw/` y casi todas sus líneas caducan al
+cumplirse. Sin índice (regla 1), cada archivo que sobra se paga en **todas**
+las búsquedas. Cada 12 h, `friday.py::_memory_keeper` funde las diarias de más
+de 14 días en `raw/Memoria consolidada.md` y retira los originales.
+
+Cuatro invariantes:
+
+1. **Python clasifica, el motor comprime.** Que un apunte sea rutina es
+   cuestión de forma («abre», «sube», «cierra») y lo resuelve una regex. Lo
+   que necesita criterio es fundir veinte apuntes en dos frases. Por eso la
+   consolidación **funciona con el motor caído**: los esenciales pasan tal
+   cual. Peor resumen, pero no es pérdida.
+2. **Nada se retira antes de estar escrito.** Se relee el consolidado *del
+   disco* y se comprueba que el rango esté. Del otro lado está el único
+   ejemplar.
+3. **Solo diarias de `raw/`** — tipo `daily` **y** zona `raw`. Ni `wiki/` ni
+   `outputs/`: ahí están las notas con nombre propio y las que se citan por
+   [[enlace]]. Resumirlas sería reescribirle sus notas al usuario.
+4. **Retirar pasa por `policy.can_prune()`**, el único permiso que *quita*
+   algo. No mira `write_roots` —el vault no está ahí— sino la frontera del
+   vault. Y no borra: mueve a `vault/.trash/`, que `Vault.files()` ya no
+   recorre, así que sale de búsquedas el mismo día y del disco a los 30.
+   Sin política, se resume pero no se retira.
+
+Las tres fases —`plan`, `summarize`, `commit`— están separadas y **no es
+estética**: las dos primeras son consultas lentas sin efecto y la tercera es
+el único comando. El ciclo autónomo toma `_busy` solo para `commit`. Envolver
+las tres en el candado dejó a FRIDAY sin responder, con el HUD clavado en
+«pensando», durante toda la llamada al motor (ver trampas).
+
+El keeper habla por `core.info`, **nunca** por `core.say`: una asistente que
+te interrumpe para contarte que ha ordenado sus propios archivos es una
+asistente que interrumpe.
+
+## Latencia: dónde se va el tiempo
+
+Un turno hablado por `claude_code` cuesta ~4 s **por llamada**, casi todo
+arranque de Node e ida y vuelta a la API. Así que lo que importa no es
+optimizar Python, es **no hacer dos llamadas donde basta una**:
+
+- Una conversación gastaba dos — clasificar y responder. El paso `chat-fast`
+  del router se queda con la segunda cuando ninguna skill reconoció nada, no
+  hay verbo de acción y la frase es corta. Medido: 9,6 s → 5,8 s.
+- `Vault.read` cachea la nota parseada con `(mtime, size)` como clave. No es
+  un índice (regla 1): vive en RAM y se reconstruye leyendo archivos. Un
+  turno recorre el vault varias veces —`search`, `stats`, el grafo— y sin
+  esto lo reparsea entero cada vez. **Toda escritura invalida su entrada
+  antes de tocar el archivo**, o dos escrituras en el mismo tick del reloj
+  devolverían contenido viejo.
+
 ## Contratos
 
 - **Skill**: hereda `skills/base.py::Skill`. Define `name`, `description`,
@@ -157,7 +214,41 @@ declarar una sin implementar.
 Se carga con `Loader`, no con `import`: si QtQuick3D falta o el driver se
 atraganta, cae al plan B en vez de dejar el acompañante sin cara.
 
+**Los picos** (`ThoughtSpikes`) son la capa que mide *cuánto* tarda, no *si*
+está ocupada: la agitación de los nodos satura en cuanto empieza a pensar.
+Cada aguja es un tramo de espera cumplido y el reloj vive en
+`desktop/bridge.py`, no en QML — es un `QTimer` y tiene que nacer en el hilo
+de Qt. Ese reloj cuenta también el **trabajo de fondo** (`agent.started` →
+`agent.done`): un encargo al taller dejaba el estado en reposo y la ventana
+diciendo que no pasaba nada durante minutos.
+
+Dos cosas que no son opcionales ahí:
+
+- **La dirección de la aguja `i` no puede depender de cuántas haya.** Con el
+  reparto habitual (`i / n`) las ya dibujadas se reacomodan en cada
+  aparición, y eso se lee como un fallo, no como crecimiento. Va una
+  secuencia de baja discrepancia evaluada en `i`.
+- **`effort` se cuantiza a centésimas en el puente.** Alimenta una geometría
+  que se reconstruye al cambiar; sin cuantizar serían once reconstrucciones
+  por segundo por cambios que nadie ve.
+
 ## Trampas conocidas (ya nos mordieron)
+
+### El candado del turno
+
+- **`Bus.emit` espera a los handlers en línea.** No es fire-and-forget: el
+  `await` no vuelve hasta que todos los suscriptores terminaron. Un handler
+  lento retrasa a quien emitió.
+- **Nada que tarde puede sostener `friday.py::_busy`.** Es el candado que
+  serializa los turnos: mientras esté tomado, una petición nueva se queda
+  esperando **antes** del router, así que no hay `router.decided` ni
+  `skill.result` y el HUD se queda en «pensando» sin límite visible. Pasó con
+  el ama de llaves: consolidaba dentro del candado y la llamada al motor
+  puede irse a los 180 s del timeout. Regla: dentro del candado solo va lo
+  que muta; lo lento se prepara fuera y, si hay turno en curso
+  (`_busy.locked()`), el mantenimiento se salta el ciclo.
+- **El trabajo pesado va en `asyncio.to_thread`.** Recorrer el vault entero
+  en el bucle de eventos congela el HUD y retrasa cada evento del bus.
 
 ### Motor y sistema
 - **Windows + npm shim**: pasar prompts largos por argv a `claude.CMD` los
@@ -283,14 +374,21 @@ probabilístico es lo que pasa cuando se equivoca:
 - **Un disparador corto y comun gana aunque la frase hable de otra cosa.** El
   puntaje no puede arreglarlo: no es un fallo suyo. Por eso el seguimiento de
   conversacion se resuelve **antes** del enrutado rapido, no compitiendo con el.
+- **Llamarse como una palabra corriente es un problema de enrutado.** El
+  puntaje generico regala 0.35 a la skill cuyo nombre sale en la frase, y
+  «memoria» sale tanto en «consolida la memoria» como en «cuanta memoria RAM
+  me queda». `skills/memoria.py` sobrescribe `matches()` como ya hacia
+  `motor`: exige verbo **y** objeto, y devuelve 0 si huele a RAM. Si añades
+  una skill con nombre generico, o le pones otro nombre, o le escribes su
+  propio `matches`.
 - **Ventana translúcida sin blur = texto ilegible.** Qt no desenfoca lo que hay
   detrás; eso lo hace el compositor (`desktop/backdrop.py`, opcional).
 
 ## Verificar cambios
 
 ```powershell
-.\.venv\Scripts\python scripts\smoke_test.py     # 62 · memoria, skills, enrutado, conversación
-.\.venv\Scripts\python scripts\system_test.py    # 117 · política, puertos, red, motor, taller, PTT
+.\.venv\Scripts\python scripts\smoke_test.py     # 101 · memoria, consolidación, skills, enrutado
+.\.venv\Scripts\python scripts\system_test.py    # 135 · política, puertos, red, motor, taller, PTT
 .\.venv\Scripts\python friday.py --check         # dependencias, roster y capacidades
 .\.venv\Scripts\python scripts\ui_preview.py     # solo la interfaz, iteración rápida
 ```
@@ -305,5 +403,9 @@ hay que mirarla:
 
 ```powershell
 .\.venv\Scripts\python scripts\ui_preview.py thinking --shot nucleo.png
+.\.venv\Scripts\python scripts\ui_preview.py thinking --picos 14 --shot erizado.png
 .\.venv\Scripts\python scripts\ui_preview.py idle --projected --shot planb.png
 ```
+
+`--picos N` fija cuántas agujas lleva acumuladas: sirve para mirar el extremo
+—una espera larguísima— sin esperarla.

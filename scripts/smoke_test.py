@@ -39,6 +39,9 @@ class FakeEngine(Engine):
 
     async def complete(self, prompt: str, system: str = "", **kw) -> str:
         self.calls.append(prompt)
+        if '"esencial"' in prompt:
+            return ('{"titulo": "Lo que quedo", '
+                    '"esencial": ["El deploy es los viernes"]}')
         if '"skill"' in prompt:
             return '{"skill": "none", "confidence": 0.3, "why": "prueba"}'
         if '"title"' in prompt:
@@ -149,6 +152,12 @@ async def main() -> int:
 
         "que tengo abierto": "sistema",
 
+        # memoria vs metricas: la skill se llama como una palabra que sale en
+        # las dos preguntas, asi que el puntaje generico no puede decidir
+        "consolida la memoria": "memoria",
+        "limpia las notas viejas": "memoria",
+        "cuanta memoria ram me queda": "metricas",
+
         # taller vs el resto: encargarle trabajo a un agente en un repo
         "metete en mi-proyecto y revisa por que fallan los tests": "taller",
     }
@@ -238,6 +247,22 @@ async def main() -> int:
     r = await router.decide("y eso cuanto cuesta")
     check("sin hilo vivo no hay seguimiento", r.how != "chat", f"-> {r.skill} ({r.how})")
 
+    # ── charla sin gastar motor ──────────────────────────────
+    # Un turno de conversacion gastaba dos llamadas: una para preguntar a
+    # quien enrutarlo y otra para responder. Con `claude_code` eso es la
+    # mitad del tiempo de respuesta, gastada en confirmar lo evidente.
+    r = await router.decide("que opinas de los lunes")
+    check("la charla evidente no pasa por el motor",
+          r.how == "chat-fast" and r.skill == "none", f"-> {r.skill} ({r.how})")
+    check("una orden sin skill reconocida NO es charla",
+          not router._is_smalltalk("cierra la lampara del salon", {"x": 0.0}),
+          "el verbo de accion manda")
+    check("una frase larga tampoco",
+          not router._is_smalltalk(" ".join(["palabra"] * 20), {"x": 0.0}))
+    check("y si alguna skill puntuo, arbitra el motor",
+          not router._is_smalltalk("que opinas", {"x": 0.3}),
+          "esa duda vale los cuatro segundos")
+
     # la conversacion libre responde en prosa: pedir JSON aqui encoge las
     # respuestas y, con un 8B local, cada tanto rompe el formato
     res = await router._freeform("y eso que significa")
@@ -310,6 +335,150 @@ async def main() -> int:
     check("heal crea stubs", "Nota Inexistente" in created, str(created))
     check("heal cierra el enlace", not graph.build(force=True).broken(),
           f"{len(graph.broken())} rotos")
+
+    # ── consolidacion de la memoria ──────────────────────────
+    # Lo que se prueba: que lo rutinario se queda fuera, que lo dicho para
+    # ser recordado sobrevive, que nada se retira antes de estar escrito y
+    # que solo se tocan las diarias de raw/.
+    from core.policy import Policy
+    from memory.consolidate import Consolidator
+
+    def diaria(fecha: str, lineas: list[str]) -> None:
+        vault.write(f"raw/{fecha}.md",
+                    f"# {fecha}\n\n## Log\n" + "\n".join(lineas),
+                    meta={"type": "daily", "date": fecha, "tags": ["daily"]})
+
+    diaria("2020-03-01", [
+        "- `09:02` **voz** — abre Spotify",
+        "- `09:40` **voz** — sube el volumen",
+        "- `10:15` **vault** — «el deploy es los viernes» → [[Deploy]]",
+        "- `11:00` **pantalla** — Lectura de pantalla — Visual Studio Code",
+    ])
+    diaria("2020-03-02", [
+        "- `08:30` **voz** — que hora es",
+        "- `12:00` **agenda** — Agendado: revision con Ana el 2020-03-09",
+        "- `18:20` **voz** — el servidor de staging se cae los martes",
+    ])
+    antes = vault.stats()
+
+    con = Consolidator(vault, keep_days=7, min_notes=2,
+                       target="raw/Memoria consolidada.md", trash_days=30)
+    p = con.plan()
+    check("plan agarra las diarias viejas", len(p.sources) == 2, f"{len(p.sources)}")
+    check("plan omite lo rutinario", p.rutina == 4, f"{p.rutina} rutinas")
+    frases = " | ".join(a.text for a in p.esencia)
+    check("«recuerda que» y la agenda sobreviven",
+          "deploy" in frases and "Ana" in frases, frases[:90])
+    check("la orden cumplida no sobrevive",
+          "Spotify" not in frases and "volumen" not in frases, frases[:90])
+
+    # El guardia primero: por defecto el vault del toml no es este temporal,
+    # asi que retirar aqui tiene que estar denegado.
+    policy = Policy(cfg)
+    check("no se retira nada fuera del vault declarado",
+          policy.can_prune(p.sources).verdict.value == "deny",
+          policy.can_prune(p.sources).reason)
+    policy.vault_root = Path(tmp).resolve()
+    check("dentro del vault si", policy.can_prune(p.sources).allowed)
+    check("y nunca algo que no sea una nota",
+          policy.can_prune([Path(tmp) / "raw" / "cosa.exe"]).verdict.value == "deny")
+
+    rep = await con.run(engine, policy)
+    check("consolidacion escribe una sola nota",
+          rep.ok and vault.exists("raw/Memoria consolidada.md"), rep.reason)
+    consolidada = vault.read("raw/Memoria consolidada.md").body
+    check("el consolidado lleva el rango", "2020-03-01 → 2020-03-02" in consolidada,
+          consolidada[:60])
+    check("el motor comprimio", rep.by_engine and "deploy" in consolidada.lower(),
+          f"by_engine={rep.by_engine}")
+    check("los originales se retiran", rep.retired == 2 and rep.shrunk > 0,
+          f"{rep.retired} notas, {rep.shrunk} bytes")
+    check("y salen de la vista del vault",
+          not vault.exists("raw/2020-03-01.md")
+          and all("2020-03-01" not in n.rel for n in vault.all_notes()))
+    check("pero siguen en la papelera",
+          any(p.name.startswith("raw__2020-03-01") for p in vault.trash_dir.glob("*.md")),
+          str([p.name for p in vault.trash_dir.glob('*.md')]))
+    check("el vault vivo pesa menos", vault.stats()["bytes"] < antes["bytes"],
+          f"{antes['bytes']} → {vault.stats()['bytes']} bytes")
+    check("wiki y outputs no se tocan",
+          vault.exists("wiki/Proyecto Alfa.md") and vault.stats()["wiki"] >= 3)
+
+    # Sin permiso no se retira, pero el resumen se escribe igual: perder el
+    # resumen porque no se puede borrar seria cambiar una cosa por otra.
+    diaria("2020-04-01", ["- `09:00` **voz** — el proveedor cambia en mayo"])
+    diaria("2020-04-02", ["- `09:00` **voz** — la migracion la lleva Beto"])
+    policy.allow_memory_prune = False
+    rep2 = await con.run(engine, policy)
+    check("sin permiso el resumen se escribe igual", rep2.ok and rep2.kept > 0,
+          rep2.reason)
+    check("pero no se retira nada",
+          rep2.retired == 0 and vault.exists("raw/2020-04-01.md"), rep2.reason)
+
+    rep3 = await con.run(engine, None)
+    check("sin guardia se resume pero no se retira",
+          rep3.notes == 2 and rep3.retired == 0 and vault.exists("raw/2020-04-01.md"),
+          rep3.reason)
+
+    policy.allow_memory_prune = True
+    await con.run(engine, policy)
+    rep4 = await con.run(engine, policy)
+    check("sin diarias viejas la pasada no hace nada",
+          rep4.notes == 0 and not rep4.retired, rep4.reason)
+
+    # ── consulta y comando separados ─────────────────────────
+    # `plan` y `summarize` no tocan disco: es lo que permite que el ciclo
+    # autonomo los corra FUERA del candado del turno. Si alguien vuelve a
+    # meter escritura en la fase lenta, FRIDAY deja de responder mientras
+    # el motor resume — y eso ya paso una vez.
+    for dia in ("2018-01-01", "2018-01-02", "2018-01-03"):
+        diaria(dia, [f"- `09:00` **voz** — el contrato de {dia} vence en junio"])
+    p5 = con.plan()
+    huella = vault.stats()
+    res5 = await con.summarize(engine, p5)
+    check("summarize es una consulta: no escribe nada",
+          vault.stats() == huella and res5.lineas, str(res5.lineas)[:60])
+    rep5 = con.commit(p5, res5, policy)
+    check("commit es el unico que muta", rep5.retired == 3 and rep5.ok, rep5.reason)
+
+    # ── cache de notas del vault ─────────────────────────────
+    parseos = {"n": 0}
+    original = vault._parse
+
+    def contando(p, st):
+        parseos["n"] += 1
+        return original(p, st)
+
+    vault._parse = contando
+    vault._cache.clear()             # el vault ya lleva rato caliente
+    vault.all_notes()
+    primera, parseos["n"] = parseos["n"], 0
+    vault.all_notes()
+    check("la segunda pasada del vault no reparsea nada",
+          primera > 0 and parseos["n"] == 0,
+          f"{primera} parseos la primera, {parseos['n']} la segunda")
+    vault.write("wiki/Proyecto Alfa.md", "linea que invalida", mode="append")
+    check("una escritura invalida su entrada del cache",
+          "linea que invalida" in vault.read("wiki/Proyecto Alfa.md").body)
+    vault._parse = original
+
+    # ── la skill, con los ajustes del toml de verdad ─────────
+    mem = skills["memoria"]
+    ctx.policy = policy
+    ctx.text = "cuanto ocupa la memoria"
+    res = await mem.run(ctx)
+    check("preguntar el tamaño no escribe nada",
+          res.ok and not res.writes, str(res.writes))
+
+    for dia in ("2019-05-01", "2019-05-02", "2019-05-03"):
+        diaria(dia, [f"- `09:00` **voz** — el contrato de {dia} vence en junio",
+                     "- `09:05` **voz** — abre el navegador"])
+    ctx.text = "consolida la memoria"
+    res = await mem.run(ctx)
+    check("la skill consolida y lo dice",
+          res.ok and res.writes and res.data["notes"] == 3, res.speak)
+    check("y deja de haber tres diarias",
+          not vault.exists("raw/2019-05-01.md"), str(res.data))
 
     # ── limpieza de TTS (sin audio) ──────────────────────────
     from voice.tts import LocalTTS

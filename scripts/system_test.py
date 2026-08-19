@@ -232,6 +232,45 @@ async def main() -> int:
           not Policy(FakeCfg(sandbox, allow_agent=False,
                              agent_roots=[str(sandbox)])).can_delegate(sandbox).allowed)
 
+    # ── retirar memoria: el unico permiso que QUITA algo ──
+    # No se apoya en `write_roots` a proposito: el vault no esta ahi y no
+    # tiene por que estarlo. La frontera es el vault, porque lo que se
+    # retira son notas que escribio FRIDAY y que ya viven resumidas en otra.
+    boveda = sandbox / "boveda"
+    (boveda / "raw").mkdir(parents=True, exist_ok=True)
+    diaria = boveda / "raw" / "2020-01-01.md"
+    diaria.write_text("x", encoding="utf-8")
+
+    podar = Policy(FakeCfg(sandbox))
+    podar.vault_root = boveda.resolve()
+    check("retira una nota de dentro del vault",
+          podar.can_prune([diaria]).allowed)
+    # Un .md, para que lo que decida sea la frontera del vault y no la
+    # extension: fuera del vault hay markdown del usuario, y es justo el
+    # caso que este permiso tiene que rechazar.
+    # En una subcarpeta: el sandbox de arriba es el desorden que organiza la
+    # prueba de `archivos`, y un .md suelto ahi le cambia la cuenta.
+    papeles = sandbox / "papeles"
+    papeles.mkdir(exist_ok=True)
+    fuera_md = papeles / "apuntes mios.md"
+    fuera_md.write_text("mios", encoding="utf-8")
+    check("no retira notas de fuera del vault",
+          not podar.can_prune([fuera_md]).allowed,
+          podar.can_prune([fuera_md]).reason)
+    check("no retira lo que no es una nota",
+          not podar.can_prune([boveda / "raw" / "algo.exe"]).allowed,
+          "una ruta con otra extension no llego de la consolidacion")
+    check("un solo camino malo tumba el lote entero",
+          not podar.can_prune([diaria, sandbox / "musica.mp3"]).allowed,
+          "gana la decision mas restrictiva")
+    apagado = Policy(FakeCfg(sandbox, allow_memory_prune=False))
+    apagado.vault_root = boveda.resolve()
+    check("allow_memory_prune=false lo apaga",
+          not apagado.can_prune([diaria]).allowed)
+    check("y escribir archivos sigue permitido",
+          apagado.can_write(sandbox / "x.txt").allowed,
+          "son dos permisos distintos, no uno con dos nombres")
+
     # ══════════════════ INDICE (solo lectura) ══════════════════
     print("\n  ── indice de archivos ──")
     index = LocalFileIndex(policy)
