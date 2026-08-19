@@ -133,6 +133,19 @@ bloom       = true
 depth_field = true          # el desenfoque cinematografico del fondo
 fov         = 42
 
+# ── los picos de pensamiento ─────────────────────────────
+# Cada tramo de espera cumplido saca una aguja del globo. La agitacion de
+# los nodos ya dice «esta ocupada», pero satura enseguida: un turno de dos
+# segundos y un encargo de cuatro minutos se ven igual. Los picos dicen
+# CUANTO, y siguen contando mientras el taller trabaja en segundo plano.
+#
+# thought_every_s bajo = mas agujas y antes. Ponlo alto si prefieres que
+# solo se ericen las esperas de verdad largas.
+thought_nodes   = true
+thought_every_s = 2.5       # segundos de espera por aguja
+thought_max     = 14        # tope; mas alla el globo es una bola de pinchos
+effort_full_s   = 45        # cuando el esfuerzo se considera al maximo
+
 # ----------------------------------------------------------
 # SISTEMA  —  las manos sobre la computadora.
 # ----------------------------------------------------------

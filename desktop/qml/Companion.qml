@@ -261,6 +261,8 @@ Item {
             state_: friday.state
             level: friday.level
             base: 96
+            effort: friday.effort
+            thoughts: friday.thoughts
         }
 
         // arrastrar la ventana desde el nucleo
@@ -277,11 +279,15 @@ Item {
     // ══════════════════════ estado bajo el nucleo
     Text {
         anchors { horizontalCenter: orbHost.horizontalCenter; top: orbHost.bottom; topMargin: -18 }
+        // El estado manda, salvo en reposo: ahi los picos son la unica pista
+        // de que un encargo de fondo sigue corriendo, y una silueta erizada
+        // sin una palabra que la explique se lee como un adorno.
         text: friday.state === "listening" ? "escuchando"
             : friday.state === "thinking"  ? "sincronizando capas"
             : friday.state === "speaking"  ? "transmitiendo"
             : friday.state === "waiting"   ? "esperando confirmacion"
             : friday.state === "error"     ? "anomalia"
+            : friday.thoughts > 0          ? "trabajando en segundo plano"
             : ""
         color: root.dim
         font { family: "Cascadia Mono, Consolas, monospace"; pixelSize: 10; letterSpacing: 2.4 }

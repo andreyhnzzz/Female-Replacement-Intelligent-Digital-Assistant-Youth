@@ -7,6 +7,8 @@ cargue el modelo de voz.
     python scripts/ui_preview.py                 estado inactivo
     python scripts/ui_preview.py listening       el nucleo escuchando
     python scripts/ui_preview.py thinking        procesando: los nodos hierven
+                                                 y van saliendo picos, uno
+                                                 cada 1,2 s hasta el tope
     python scripts/ui_preview.py waiting         con confirmacion pendiente
 
     python scripts/ui_preview.py thinking --shot nucleo.png
@@ -14,6 +16,10 @@ cargue el modelo de voz.
         con particulas y post-proceso no se puede validar leyendo el QML:
         hay que mirarla. Esto permite mirarla sin ojos humanos delante y
         comparar dos versiones lado a lado.
+
+    python scripts/ui_preview.py thinking --picos 14 --shot erizado.png
+        cuantos picos de pensamiento lleva acumulados. Sirve para ver el
+        extremo —una espera larguisima— sin esperarla.
 
     python scripts/ui_preview.py idle --projected
         fuerza el plan B en 2.5D aunque QtQuick3D este disponible.
@@ -73,18 +79,27 @@ class MockBridge(QObject):
     statusChanged = Signal()
     modelChanged = Signal()
     pttChanged = Signal()
+    effortChanged = Signal()
+    thoughtsChanged = Signal()
     logAppended = Signal(str, str)
 
-    def __init__(self, state: str = "idle", ptt: str = "pulsa F9"):
+    def __init__(self, state: str = "idle", ptt: str = "pulsa F9", picos: int = 6):
         super().__init__()
         self._state = state
         self._level = 0.0
         self._ptt = ptt
         self._pending = ("organizar Downloads: 199 movimientos"
                          if state == "waiting" else "")
+        # Los picos arrancan a media altura en «thinking»: una captura a los
+        # 2,6 s con el contador desde cero saldria con una aguja o ninguna,
+        # que es justo lo que no hay que mirar.
+        self._thoughts = picos if state == "thinking" else 0
+        self._effort = min(1.0, picos / 12.0) if state == "thinking" else 0.0
 
     state = Property(str, lambda s: s._state, notify=stateChanged)
     level = Property(float, lambda s: s._level, notify=levelChanged)
+    effort = Property(float, lambda s: s._effort, notify=effortChanged)
+    thoughts = Property(int, lambda s: s._thoughts, notify=thoughtsChanged)
     transcript = Property(str, lambda s: "organiza mis descargas",
                           notify=transcriptChanged)
     response = Property(str, lambda s: DEMO, notify=responseChanged)
@@ -100,6 +115,17 @@ class MockBridge(QObject):
         import time
         self._level = abs(math.sin(time.time() * 3)) * 0.5
         self.levelChanged.emit()
+
+    def think(self) -> None:
+        """Un pico mas, como si la tarea siguiera sin volver.
+
+        Al llegar al tope vuelve a cero: en vivo interesa ver el brote de la
+        aguja nueva una y otra vez, no dejar el globo erizado y quieto.
+        """
+        self._thoughts = 0 if self._thoughts >= 14 else self._thoughts + 1
+        self._effort = min(1.0, self._thoughts / 12.0)
+        self.thoughtsChanged.emit()
+        self.effortChanged.emit()
 
     # ranuras que el QML invoca — sin @Slot, QML no las ve como funciones
     @Slot(str)
@@ -146,6 +172,11 @@ def main() -> int:
         i = args.index("--shot")
         shot = args[i + 1] if i + 1 < len(args) else "preview.png"
         del args[i:i + 2]
+    picos = 6
+    if "--picos" in args:
+        i = args.index("--picos")
+        picos = int(args[i + 1]) if i + 1 < len(args) else 6
+        del args[i:i + 2]
     projected = "--projected" in args
     args = [a for a in args if not a.startswith("--")]
     state = args[0] if args else "idle"
@@ -153,7 +184,7 @@ def main() -> int:
     app = QApplication([])
     conf, ptt = hud_config(projected)
 
-    bridge = MockBridge(state, ptt)
+    bridge = MockBridge(state, ptt, picos)
     view = QQuickView()
     view.setFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
     view.setColor(QColor(0, 0, 0, 0))
@@ -184,6 +215,12 @@ def main() -> int:
         t.timeout.connect(bridge.pulse)
         t.start(50)
         app._t = t  # evita que el recolector se lo lleve
+
+    if state == "thinking" and not shot:
+        t = QTimer()
+        t.timeout.connect(bridge.think)
+        t.start(1200)
+        app._tp = t
 
     if shot:
         # Las particulas tardan en emitirse y el post-proceso necesita un par

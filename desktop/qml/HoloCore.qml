@@ -16,6 +16,8 @@ Item {
     property string state_: "idle"
     property real   level: 0.0
     property real   base: 96
+    property real   effort: 0.0        // cuanto lleva trabajando, 0..1
+    property int    thoughts: 0        // picos de pensamiento acumulados
 
     // Config de [desktop.core]. `hudCfg` lo inyecta Python; si no esta
     // —vista previa suelta, pruebas— se usan valores razonables.
@@ -48,6 +50,15 @@ Item {
             item.state_ = Qt.binding(function () { return core.state_; });
             item.level = Qt.binding(function () { return core.level; });
             item.base = Qt.binding(function () { return core.base; });
+
+            // Los picos son de la escena 3D. Se enlazan igual que el resto,
+            // pero solo si la implementacion cargada los declara: el plan B
+            // no los tiene y pedirselos seria un error de QML en el fallback,
+            // que es justo el sitio donde no se puede fallar.
+            if (item.effort !== undefined)
+                item.effort = Qt.binding(function () { return core.effort; });
+            if (item.thoughts !== undefined)
+                item.thoughts = Qt.binding(function () { return core.thoughts; });
 
             // Los ajustes solo se aplican si la implementacion los declara:
             // el plan B los tiene por compatibilidad, pero no los usa.

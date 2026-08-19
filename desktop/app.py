@@ -101,7 +101,14 @@ class CompanionApp:
         ready.wait(timeout=5)
 
         # ── puente y ventana ──────────────────────────────────────
-        self.bridge = FridayBridge(self.bus, self._submit, self._loop)
+        # El reloj de los picos vive en el puente, no en QML: es un QTimer y
+        # tiene que nacer en el hilo de Qt, que es este.
+        self.bridge = FridayBridge(
+            self.bus, self._submit, self._loop,
+            thought_every_s=float(self.cfg.get("desktop.core.thought_every_s", 2.5)),
+            thought_max=(int(self.cfg.get("desktop.core.thought_max", 14))
+                         if self.cfg.get("desktop.core.thought_nodes", True) else 0),
+            effort_full_s=float(self.cfg.get("desktop.core.effort_full_s", 45)))
         self.bridge.set_ptt(self.cfg.ptt_hint())
         self._build_window()
         self._build_tray()

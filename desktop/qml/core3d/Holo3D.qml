@@ -11,10 +11,17 @@
 //   radios    lineas que salen del nucleo hacia la superficie.
 //   armazon   meridianos y paralelos — la estructura del globo.
 //   nodos     la nube de puntos luminosos. ESTA es la que reacciona.
+//   picos     las agujas del pensamiento. Solo salen cuando algo tarda.
 //
 // La reaccion de los nodos no es un cambio de color: al pensar se **agitan**
 // de verdad, se separan de su posicion de reposo y aceleran. Escuchar los
 // hace respirar con tu voz. Es la diferencia entre un adorno y un indicador.
+//
+// Los picos son la capa que mide **cuanto** tarda, no si esta ocupada. La
+// agitacion satura en cuanto empieza a pensar y a partir de ahi un turno de
+// dos segundos y un encargo de cuatro minutos se ven igual. Cada aguja es un
+// tramo de espera cumplido, asi que la silueta erizada dice de un vistazo si
+// esto va a tardar. El resto de la escena no se toca: los picos se suman.
 
 import QtQuick
 import QtQuick3D
@@ -28,6 +35,8 @@ Item {
     property string state_: "idle"     // idle · listening · thinking · speaking · error · waiting
     property real   level: 0.0         // nivel de audio 0..1
     property real   base: 96           // radio del globo, en unidades de escena
+    property real   effort: 0.0        // cuanto lleva trabajando, 0..1
+    property int    thoughts: 0        // picos de pensamiento acumulados
 
     // ── ajustes que vienen del toml ───────────────────────────────
     property int  nodes: 1400
@@ -70,6 +79,26 @@ Item {
         state_ === "speaking"  ? 0.35 : 0.08
 
     Behavior on agitation { NumberAnimation { duration: 520; easing.type: Easing.OutCubic } }
+
+    // ══════════════════ el brote de un pico nuevo
+    // Escala momentanea de la capa entera. Se dispara desde `thoughts`, no
+    // desde una señal del puente: asi la escena sigue siendo autonoma y la
+    // vista previa la reproduce sin cablear nada.
+    property real pop: 1.0
+
+    onThoughtsChanged: if (thoughts > 0) brote.restart()
+
+    SequentialAnimation {
+        id: brote
+        NumberAnimation {
+            target: holo; property: "pop"; to: 0.90
+            duration: 90; easing.type: Easing.OutQuad
+        }
+        NumberAnimation {
+            target: holo; property: "pop"; to: 1.0
+            duration: 420; easing.type: Easing.OutBack
+        }
+    }
 
     View3D {
         id: view
@@ -195,6 +224,38 @@ Item {
                     duration: 71000 * holo.tempo
                     loops: Animation.Infinite
                     running: true
+                }
+            }
+
+            // ══════════════════ los picos de pensamiento
+            // Se reconstruye la malla cuando cambia el numero de agujas o su
+            // alcance. Es barato —una aguja son tres segmentos y hay catorce
+            // como mucho— y a cambio la posicion de cada una vive en Python,
+            // donde ya vive el resto de la geometria.
+            Node {
+                visible: holo.thoughts > 0
+
+                Model {
+                    geometry: ThoughtSpikes {
+                        radius: holo.base
+                        count: holo.thoughts
+                        // Cuanto mas lleva trabajando, mas lejos llegan. Es
+                        // la segunda lectura: el numero de agujas cuenta los
+                        // tramos, el largo dice cuanto pesa la espera.
+                        //
+                        // El techo es corto a proposito. Una aguja que pasa
+                        // de un tercio del radio deja de leerse como pico del
+                        // objeto y pasa a leerse como un arañazo sobre la
+                        // escena: cruza el encuadre, no sale del globo.
+                        reach: 0.15 + holo.effort * 0.19
+                        seed: 41
+                    }
+                    materials: holoSpike
+
+                    // El brote. Una aguja que aparece a tamaño final no se
+                    // ve aparecer: la escena entera esta en movimiento y el
+                    // ojo la toma por una que ya estaba.
+                    scale: Qt.vector3d(holo.pop, holo.pop, holo.pop)
                 }
             }
 
@@ -380,6 +441,21 @@ Item {
         cullMode: Material.NoCulling
         depthDrawMode: Material.NeverDepthDraw
         Behavior on opacity { NumberAnimation { duration: 420 } }
+    }
+
+    // Los picos van mas opacos que el armazon aunque compartan paleta: nacen
+    // sobre la nube de nodos y con la opacidad del armazon se perderian
+    // dentro de ella justo cuando tienen algo que decir.
+    PrincipledMaterial {
+        id: holoSpike
+        lighting: PrincipledMaterial.NoLighting
+        vertexColorsEnabled: true
+        baseColor: holo.gold
+        alphaMode: PrincipledMaterial.Blend
+        opacity: 0.55 + holo.effort * 0.45
+        cullMode: Material.NoCulling
+        depthDrawMode: Material.NeverDepthDraw
+        Behavior on opacity { NumberAnimation { duration: 300 } }
     }
 
     PrincipledMaterial {
