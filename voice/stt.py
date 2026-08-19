@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import time
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -51,6 +52,7 @@ class LocalSTT:
             os.environ.setdefault("HF_HUB_OFFLINE", "1")
             os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
+        self._registrar_dlls_cuda()
         from faster_whisper import WhisperModel
 
         device = self.device
@@ -63,6 +65,34 @@ class LocalSTT:
                                    local_files_only=not allow_download)
         self.ready = True
         self.info = f"{self.model_name}/{device}/{compute} ({time.time() - t0:.1f}s)"
+
+    @staticmethod
+    def _registrar_dlls_cuda() -> None:
+        """Hace visibles las DLL de los wheels `nvidia-cublas/cudnn-cu12`.
+
+        Viven en `site-packages/nvidia/*/bin`, que no esta en la ruta de
+        busqueda de Windows: sin esto CTranslate2 no las encuentra aunque
+        esten instaladas. Quien suele registrarlas es torch, y aqui no hay
+        torch. Opcional a proposito — sin los wheels no pasa nada y el STT
+        se queda en CPU.
+
+        Va por PATH y no por `os.add_dll_directory`: CTranslate2 las carga
+        desde C++ con `LoadLibrary` a secas, que no mira los directorios
+        que añade esa funcion. Medido: con PATH se queda en cuda; sin el,
+        cae al rescate de CPU.
+        """
+        try:
+            import nvidia
+        except ImportError:
+            return
+        nuevos = [str(c) for base in nvidia.__path__
+                  for c in Path(base).glob("*/bin")]
+        if not nuevos:
+            return
+        actual = os.environ.get("PATH", "")
+        faltan = [d for d in nuevos if d not in actual]
+        if faltan:
+            os.environ["PATH"] = os.pathsep.join(faltan + [actual])
 
     @staticmethod
     def _has_cuda() -> bool:
