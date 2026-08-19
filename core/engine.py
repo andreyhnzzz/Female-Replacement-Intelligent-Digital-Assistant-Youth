@@ -505,6 +505,17 @@ class ModelSpec:
     model: str                    # id que entiende ese backend
     say: tuple[str, ...] = ()     # alias hablados
     note: str = ""                # una linea para el panel
+    # Proveedor propio de ESTA entrada. Sin esto, `openai_compat` lee un unico
+    # bloque global del toml y solo cabe un proveedor por proceso: DeepSeek o
+    # Qwen o el llama.cpp de casa, nunca los tres. Siguen siendo datos del
+    # toml (regla 3) — el adaptador no cambia, cambia a donde apunta.
+    base_url: str = ""
+    api_key_env: str = ""
+
+    @property
+    def provider_id(self) -> str:
+        """Identidad del proveedor, para no compartir adaptador entre dos."""
+        return f"{self.backend}|{self.base_url}|{self.api_key_env}"
 
     @property
     def aliases(self) -> tuple[str, ...]:
@@ -561,6 +572,8 @@ def load_roster(cfg: Config) -> list[ModelSpec]:
             model=str(item.get("model", "")),
             say=tuple(str(s) for s in item.get("say", [])),
             note=str(item.get("note", "")),
+            base_url=str(item.get("base_url", "") or ""),
+            api_key_env=str(item.get("api_key_env", "") or ""),
         ))
     return out
 
