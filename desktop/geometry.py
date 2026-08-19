@@ -1,23 +1,18 @@
 """Geometria del nucleo holografico, generada en Python.
 
-QML no sabe construir mallas. Qt Quick 3D expone `QQuick3DGeometry` para eso:
-se rellena un buffer de vertices y se declara que significa cada tramo. Aqui
-se construyen las tres piezas que dan la estructura del holograma:
+QML no sabe construir mallas; `QQuick3DGeometry` si. Cuatro piezas:
 
     WireGlobe      meridianos y paralelos — el armazon esferico
     RadialSpokes   los radios que salen del nucleo hacia la superficie
     DataArcs       arcos y cuerdas sueltas — la textura de «datos vivos»
+    ThoughtSpikes  los picos: una aguja por tramo de espera cumplido
 
-Todo son **lineas**, no triangulos. Un holograma no tiene superficie: tiene
-aristas que brillan. Las lineas ademas cuestan una fraccion de lo que cuesta
-una malla equivalente y no necesitan normales ni iluminacion.
+Todo son lineas, no triangulos: un holograma no tiene superficie, tiene
+aristas que brillan — y ademas no necesitan normales ni iluminacion. El color
+va por vertice, que es el degradado de profundidad horneado en la malla.
 
-Los nodos luminosos NO se construyen aqui: son particulas (`SpriteParticle3D`),
-porque tienen que reaccionar al estado y un buffer estatico no reacciona.
-
-Cada vertice lleva posicion y color. El color por vertice es lo que hace que
-la esfera se apague hacia los polos y hacia el fondo sin necesidad de un
-shader propio: es un degradado horneado en la malla.
+Los nodos luminosos son particulas, no malla: tienen que reaccionar al estado
+y un buffer estatico no reacciona.
 """
 from __future__ import annotations
 
@@ -40,9 +35,8 @@ _STRIDE = 7 * 4
 class _LineGeometry(QQuick3DGeometry):
     """Base: acumula segmentos y los sube como un buffer de lineas.
 
-    Las subclases solo implementan `_build`, que llama a `_line` tantas veces
-    como haga falta. El empaquetado, los limites y el ciclo de invalidacion
-    viven aqui una sola vez.
+    Las subclases solo implementan `_build`; el empaquetado, los limites y la
+    invalidacion viven aqui una vez.
     """
 
     def __init__(self, parent=None):
@@ -116,9 +110,8 @@ class _LineGeometry(QQuick3DGeometry):
 class WireGlobe(_LineGeometry):
     """El armazon: paralelos y meridianos.
 
-    Los paralelos no se reparten uniformemente en latitud sino en **seno** de
-    latitud. Repartirlos uniformemente amontona anillos en los polos, que es
-    justo donde menos informacion hay, y deja el ecuador desnudo.
+    Los paralelos se reparten en seno de latitud, no en latitud: uniforme
+    amontona anillos en los polos y deja el ecuador desnudo.
     """
 
     ringsChanged = Signal()
@@ -139,8 +132,8 @@ class WireGlobe(_LineGeometry):
             lat = math.asin(2.0 * t - 1.0)          # denso en el ecuador
             y = r * math.sin(lat)
             rr = r * math.cos(lat)
-            # El ecuador es el eje de lectura del objeto: si todos los
-            # paralelos pesan igual, la esfera se lee como un ovillo.
+            # El ecuador es el eje de lectura: con todos los paralelos al
+            # mismo peso, la esfera se lee como un ovillo.
             equator = abs(lat) < 1e-3
             fade = 1.0 if equator else 0.22 + 0.55 * math.cos(lat) ** 2
             prev = None
@@ -169,15 +162,10 @@ class WireGlobe(_LineGeometry):
 
     @staticmethod
     def _tint(alpha: float, p: tuple[float, float, float]) -> tuple[float, float, float, float]:
-        """Oro al frente, ambar profundo al fondo.
-
-        La `z` decide: lo que viene hacia la camara arde, lo que se va se
-        enfria. Es niebla de profundidad horneada en el vertice — mas barata
-        que cualquier efecto y funciona aunque el post-proceso este apagado.
-
-        El verde nunca baja de 0.66: por debajo el ambar vira a rojo ladrillo
-        y el holograma deja de parecer oro para parecer oxido.
-        """
+        """Oro al frente, ambar profundo al fondo: niebla de profundidad
+        horneada en el vertice, que funciona aunque el post-proceso este
+        apagado. El verde nunca baja de 0.66 — por debajo el ambar vira a
+        ladrillo y el holograma parece oxido."""
         depth = max(0.0, min(1.0, (p[2] + 120.0) / 240.0))
         return (1.0, 0.66 + 0.26 * depth, 0.20 + 0.42 * depth, alpha)
 
@@ -219,9 +207,8 @@ class WireGlobe(_LineGeometry):
 class RadialSpokes(_LineGeometry):
     """Los radios: del nucleo incandescente hacia la superficie.
 
-    Se reparten con la espiral de Fibonacci sobre la esfera, no al azar. El
-    azar puro deja calvas y grumos visibles de inmediato en una esfera; la
-    espiral da una distribucion pareja que aun asi no se lee como una rejilla.
+    Espiral de Fibonacci, no azar: el azar puro deja calvas y grumos que en
+    una esfera se ven de inmediato.
     """
 
     countChanged = Signal()
@@ -246,9 +233,8 @@ class RadialSpokes(_LineGeometry):
             start = tuple(c * r * self._inner for c in direction)
             end = tuple(c * reach for c in direction)
 
-            # El radio nace blanco y muere en ambar: la luz sale del nucleo.
-            # La opacidad inicial es 1.0 y la final 0.0 — el degradado es lo
-            # que da la sensacion de emision y no de jaula de alambre.
+            # Nace blanco y muere en ambar transparente: el degradado es lo
+            # que da emision en vez de jaula de alambre.
             self._line(start, end, (1.0, 0.97, 0.86, 1.0),
                        (1.0, 0.62, 0.12, 0.0))
 
@@ -276,13 +262,122 @@ class RadialSpokes(_LineGeometry):
 
 
 @QmlElement
+class ThoughtSpikes(_LineGeometry):
+    """Los picos: una aguja por cada tramo de espera cumplido.
+
+    Es la unica pieza de la escena que cuenta algo verdadero, y por eso
+    crece hacia fuera en vez de solo brillar: un cambio de color no se lee de
+    reojo, una silueta erizada si.
+
+    Dos invariantes, las dos porque `count` cambia en vivo:
+
+    - La direccion de la aguja `i` **no depende de cuantas haya**: sale de una
+      secuencia aurea evaluada en `i`, asi que cualquier prefijo cubre la
+      esfera y la aguja 3 apunta igual con 4 que con 12. Con el reparto
+      habitual (`i / n`) las ya dibujadas se reacomodan en cada aparicion, y
+      eso se lee como fallo, no como crecimiento.
+    - El largo tambien es estable: `rebuild()` resiembra el generador y las
+      tiradas se consumen en orden.
+
+    La ultima es mas larga y arde mas: distinguirla convierte «hay siete
+    picos» en «acaba de salir uno».
+    """
+
+    countChanged = Signal()
+    reachChanged = Signal()
+
+    _AUREA = 0.6180339887498949
+
+    def __init__(self, parent=None):
+        self._count = 0
+        self._reach = 0.34
+        super().__init__(parent)
+
+    def _build(self) -> None:
+        r = self._radius
+        n = max(0, self._count)
+        golden = math.pi * (3.0 - math.sqrt(5.0))
+
+        for i in range(n):
+            # Secuencia aurea en el eje: reparto parejo para cualquier prefijo.
+            z = 1.0 - 2.0 * (((i + 0.5) * self._AUREA) % 1.0)
+            rr = math.sqrt(max(0.0, 1.0 - z * z))
+            phi = i * golden
+            d = (math.cos(phi) * rr, z, math.sin(phi) * rr)
+
+            jitter = random.uniform(0.86, 1.22)      # estable: ver el docstring
+            nueva = (i == n - 1)
+            largo = r * self._reach * jitter * (1.35 if nueva else 1.0)
+            calor = 1.0 if nueva else 0.72
+
+            base = tuple(c * r * 0.97 for c in d)
+            punta = tuple(c * (r * 0.97 + largo) for c in d)
+
+            # Blanco en la cascara, ambar apagandose en la punta: sale del
+            # objeto, no esta clavada sobre el.
+            self._line(base, punta, (1.0, 0.96, 0.82, calor),
+                       (1.0, 0.60, 0.10, 0.0))
+
+            # Lengüetas hacia atras: sin ellas la aguja se lee como un pelo;
+            # con ellas, como punta de flecha, que es lo que la hace visible
+            # contra la nube de mil nodos que tiene detras.
+            u, v = self._perpendiculares(d)
+            codo = tuple(base[k] + (punta[k] - base[k]) * 0.58 for k in range(3))
+            ala = largo * 0.38
+            for signo in (1.0, -1.0):
+                lado = tuple(codo[k] + (u[k] * signo + v[k] * signo * 0.35) * ala
+                             for k in range(3))
+                self._line(punta, lado, (1.0, 0.88, 0.52, calor * 0.85),
+                           (1.0, 0.62, 0.14, 0.0))
+
+    @staticmethod
+    def _perpendiculares(d: tuple[float, float, float]):
+        """Dos vectores perpendiculares a `d`. El eje auxiliar se elige lejos
+        de `d`: cruzar dos casi paralelos da uno casi nulo, y las lengüetas
+        de las agujas polares saldrian de largo cero."""
+        aux = (0.0, 0.0, 1.0) if abs(d[1]) > 0.9 else (0.0, 1.0, 0.0)
+        u = (d[1] * aux[2] - d[2] * aux[1],
+             d[2] * aux[0] - d[0] * aux[2],
+             d[0] * aux[1] - d[1] * aux[0])
+        nu = math.sqrt(sum(c * c for c in u)) or 1.0
+        u = tuple(c / nu for c in u)
+        v = (d[1] * u[2] - d[2] * u[1],
+             d[2] * u[0] - d[0] * u[2],
+             d[0] * u[1] - d[1] * u[0])
+        nv = math.sqrt(sum(c * c for c in v)) or 1.0
+        return u, tuple(c / nv for c in v)
+
+    def _get_count(self) -> int:
+        return self._count
+
+    def _set_count(self, v: int) -> None:
+        if v != self._count:
+            self._count = max(0, int(v))
+            self.countChanged.emit()
+            self.rebuild()
+
+    count = Property(int, _get_count, _set_count, notify=countChanged)
+
+    def _get_reach(self) -> float:
+        return self._reach
+
+    def _set_reach(self, v: float) -> None:
+        # Umbral, no igualdad: lo alimenta una interpolacion continua y cada
+        # cambio reconstruye el buffer entero.
+        if abs(v - self._reach) > 0.01:
+            self._reach = max(0.0, float(v))
+            self.reachChanged.emit()
+            self.rebuild()
+
+    reach = Property(float, _get_reach, _set_reach, notify=reachChanged)
+
+
+@QmlElement
 class DataArcs(_LineGeometry):
     """Arcos sueltos sobre la superficie: trayectorias, rutas, conexiones.
 
-    Es la capa que hace que el objeto parezca estar *procesando* algo y no
-    solo girando. Deliberadamente ilegible: sugiere un sistema complejo sin
-    afirmar ningun dato concreto. Un holograma que pretendiera mostrar cifras
-    reales estaria mintiendo, porque no las tiene.
+    Deliberadamente ilegible: sugiere un sistema complejo sin afirmar ningun
+    dato. Mostrar cifras que no existen seria mentir.
     """
 
     countChanged = Signal()
@@ -297,9 +392,8 @@ class DataArcs(_LineGeometry):
             a = self._on_sphere(r)
             b = self._on_sphere(r)
             steps = 14
-            # Los arcos van pegados a la superficie. Despegarlos mas los
-            # convierte en un ovillo de cuerdas por fuera del globo, que es
-            # exactamente lo contrario de «trayectorias sobre un mapa».
+            # Pegados a la superficie: despegarlos los vuelve un ovillo de
+            # cuerdas, lo contrario de «trayectorias sobre un mapa».
             lift = random.uniform(1.005, 1.045)
             prev = None
             for s in range(steps + 1):
@@ -328,8 +422,8 @@ class DataArcs(_LineGeometry):
 
     @staticmethod
     def _slerp(a, b, t: float):
-        """Interpolacion sobre la esfera. Con lerp recto los arcos cortarian
-        por dentro del globo y se verian como cuerdas, no como rutas."""
+        """Interpolacion sobre la esfera: con lerp recto los arcos cortan por
+        dentro del globo y se ven como cuerdas, no como rutas."""
         na = math.sqrt(sum(c * c for c in a)) or 1.0
         ua = [c / na for c in a]
         ub = [c / (math.sqrt(sum(c * c for c in b)) or 1.0) for c in b]
