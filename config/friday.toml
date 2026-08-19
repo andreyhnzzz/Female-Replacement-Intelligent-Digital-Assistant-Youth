@@ -77,6 +77,23 @@ model   = "llama3.1:8b"
 say     = ["local", "llama", "sin nube", "offline", "el local"]
 note    = "corre en tu maquina; nada sale del equipo"
 
+# Un modelo remoto barato, por el dialecto /chat/completions. Fijate en que
+# `base_url` y `api_key_env` van EN LA ENTRADA, no en `[engine.openai_compat]`:
+# asi conviven varios proveedores en el mismo roster. El bloque global sigue
+# siendo el valor por defecto para quien no declare los suyos.
+#
+# La clave NUNCA va aqui: este archivo se versiona. Va en la variable de
+# entorno que nombra `api_key_env`.
+[[engine.roster]]
+key         = "deepseek"
+label       = "DeepSeek V3"
+backend     = "openai_compat"
+model       = "deepseek-chat"
+base_url    = "https://api.deepseek.com/v1"
+api_key_env = "DEEPSEEK_API_KEY"
+say         = ["deepseek", "dipsic", "dip sic", "el barato", "china"]
+note        = "remoto y barato; buen JSON para lo que cuesta"
+
 [engine.claude_code]
 binary          = "claude"
 model           = "claude-opus-5"
