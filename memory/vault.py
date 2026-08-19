@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -135,7 +136,7 @@ class Vault:
     """Lectura/escritura del vault. Todo es un archivo, siempre."""
 
     def __init__(self, root: Path | str, raw="raw", wiki="wiki", outputs="outputs",
-                 daily_format="%Y-%m-%d"):
+                 daily_format="%Y-%m-%d", cache_max: int = 512):
         self.root = Path(root)
         self.raw = self.root / raw
         self.wiki = self.root / wiki
@@ -146,7 +147,13 @@ class Vault:
         # un turno hablado hace varias pasadas: `search`, `stats`, el grafo.
         # Esto no persiste nada — se reconstruye leyendo archivos, que es
         # justo lo que la regla pide.
-        self._cache: dict[Path, tuple[float, int, Note]] = {}
+        #
+        # Con techo, y en orden de uso: guarda el cuerpo entero de cada nota,
+        # y FRIDAY corre el dia entero. Sin tope, un vault que crece no tiene
+        # limite superior de RAM. La purga que habia solo corria dentro de
+        # `all_notes()`, o sea que dependia de que llamaras a ese metodo.
+        self._cache: OrderedDict[Path, tuple[float, int, Note]] = OrderedDict()
+        self._cache_max = max(64, int(cache_max))
         for d in (self.raw, self.wiki, self.outputs):
             d.mkdir(parents=True, exist_ok=True)
 
@@ -161,9 +168,13 @@ class Vault:
         st = p.stat()
         hit = self._cache.get(p)
         if hit is not None and hit[0] == st.st_mtime and hit[1] == st.st_size:
+            self._cache.move_to_end(p)       # sigue siendo reciente
             return hit[2]
         note = self._parse(p, st)
         self._cache[p] = (st.st_mtime, st.st_size, note)
+        self._cache.move_to_end(p)
+        while len(self._cache) > self._cache_max:
+            self._cache.popitem(last=False)  # cae la mas vieja sin usar
         return note
 
     def _parse(self, p: Path, st: Any) -> Note:

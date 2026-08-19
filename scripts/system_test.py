@@ -986,6 +986,23 @@ async def main() -> int:
 
     # ══════════════════ EL CACHE DEL VAULT TIENE TECHO ══════════════════
     print()
+    print("  ── el cache no crece sin fin ──")
+    caja = Path(tempfile.mkdtemp(prefix="friday_cache_"))
+    v = Vault(caja, cache_max=64)
+    for i in range(200):
+        v.write(v.raw / f"nota-{i:03}.md", f"apunte numero {i}")
+    for p_ in sorted(v.files()):
+        v.read(p_)
+    check("el cache se queda en su tope", len(v._cache) <= 64,
+          f"{len(v._cache)} entradas tras leer 200 notas")
+    ultima = sorted(v.files())[-1]
+    check("y conserva lo mas reciente", ultima in v._cache)
+    check("releer sigue dando lo mismo",
+          "apunte numero 199" in v.read(ultima).body)
+    shutil.rmtree(caja, ignore_errors=True)
+
+    # ══════════════════ EL ESQUEMA NO EXIGE DE MAS ══════════════════
+    print()
     shutil.rmtree(sandbox, ignore_errors=True)
     shutil.rmtree(vault.root, ignore_errors=True)
 
