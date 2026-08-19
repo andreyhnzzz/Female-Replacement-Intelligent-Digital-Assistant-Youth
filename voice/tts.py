@@ -5,31 +5,18 @@ Prioridad:
   2. SAPI5  — voces de Windows, por COM directo. Tambien 100% local.
 Ninguna de las dos manda audio a ningun lado.
 
-## La regla que gobierna este archivo
+**Todo lo que toca COM vive en el hilo `tts` y no sale de ahi.** SAPI5 tiene
+afinidad de apartamento: crearlo en un hilo y usarlo en otro no da error, da
+un cuelgue permanente en `runAndWait()`. De ahi tres rodeos que no lo son:
 
-**Todo lo que toca COM vive en el hilo `tts`, y no sale de ahi.**
-
-SAPI5 es un objeto COM con afinidad de apartamento: crearlo en un hilo y
-usarlo en otro no da error, da un cuelgue. `runAndWait()` no vuelve nunca y
-la voz se apaga para el resto de la sesion. Es exactamente lo que pasaba
-cuando el motor se construia en el hilo de carga (`asyncio.to_thread`) y se
-usaba en el hilo de la cola.
-
-De ahi salen tres decisiones que parecen rodeos y no lo son:
-
-- `load()` solo **detecta**; no construye nada. El objeto de voz se crea
-  dentro del worker, en `_run`, tras su propio `CoInitialize()`.
-- `shutup()` **no llama a COM**. Levanta un evento; el worker es quien
-  purga. Cortar la voz desde el hilo de asyncio seria reintroducir el bug
-  por la puerta de atras.
-- Se habla en modo **asincrono** y se espera en un bucle de `WaitUntilDone`,
-  en vez de usar la llamada sincrona. Cuesta cuatro lineas mas y es lo que
+- `load()` solo detecta; el objeto de voz se crea dentro del worker.
+- `shutup()` no llama a COM: levanta un evento y purga el worker.
+- Se habla en modo asincrono con un bucle de `WaitUntilDone`, que es lo que
   permite cortar a mitad de frase sin tocar el objeto desde fuera.
 
-Se usa `comtypes` directo en vez de `pyttsx3` porque su driver mantiene un
-motor cacheado en un dict global del modulo —el primer hilo que lo crea se
-queda con el para todo el proceso— y su `runAndWait()` vuelve antes de que
-el audio termine, asi que cada frase cortaba a la anterior.
+`comtypes` directo y no `pyttsx3`: este cachea el motor en un dict global del
+modulo y su `runAndWait()` vuelve antes de que acabe el audio, asi que cada
+frase cortaba a la anterior.
 """
 from __future__ import annotations
 

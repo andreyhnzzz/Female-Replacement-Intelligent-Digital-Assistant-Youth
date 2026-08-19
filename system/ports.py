@@ -187,9 +187,8 @@ class WindowReader(Protocol):
 class DefaultApps(Protocol):
     """Que aplicacion abre que cosa, segun el usuario. Solo lee.
 
-    Es puerto propio y no un metodo de `AppCatalog` porque responde otra
-    pregunta: el catalogo dice que hay **instalado**, esto dice que esta
-    **elegido**. Brave puede estar instalado sin ser el predeterminado.
+    Puerto propio y no un metodo de `AppCatalog`: el catalogo dice que hay
+    instalado, esto dice que esta elegido. No es la misma pregunta.
     """
 
     def browser(self) -> DefaultApp | None: ...
@@ -215,9 +214,7 @@ class ScreenReaderPort(Protocol):
 class NewsPort(Protocol):
     """Trae titulares. Solo lee, y solo de fuentes declaradas en el toml.
 
-    Es `async` a diferencia del resto de puertos de lectura: detras hay red,
-    y bloquear el hilo del acompanante mientras cargan seis feeds convertiria
-    el orbe en una estatua. Los puertos locales siguen siendo sincronos
+    `async` porque detras hay red: los puertos locales siguen sincronos
     porque el disco responde en microsegundos.
     """
 
@@ -230,10 +227,8 @@ class NewsPort(Protocol):
 class PageReaderPort(Protocol):
     """Descarga una pagina y la deja en texto. No navega ni ejecuta scripts.
 
-    `lookup` existe aparte de `read` porque buscar un tema y leer una URL son
-    problemas distintos: raspar la pagina de resultados de un buscador es
-    fragil y se rompe cada vez que cambian el HTML. Para temas se usa una API
-    estable; `read` queda para cuando ya sabes la direccion.
+    `lookup` va aparte de `read`: raspar resultados de un buscador se rompe
+    cada vez que cambian el HTML, asi que para temas se usa una API estable.
     """
 
     async def read(self, url: str) -> PageText: ...

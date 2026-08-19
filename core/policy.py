@@ -1,16 +1,10 @@
-"""Politica de permisos.
+"""Politica de permisos: el guardia.
 
-Una herramienta que abre programas y mueve archivos por dictado de voz
-necesita un guardia, porque el STT se equivoca. "Borra los temporales"
-mal reconocido no puede convertirse en un desastre.
+Algo que abre programas y mueve archivos por dictado necesita uno, porque el
+STT se equivoca. Cada accion con efecto recibe un veredicto — ALLOW, CONFIRM
+(hace falta un si explicito) o DENY, y se dice por que.
 
-Cada accion con efecto pasa por aqui y recibe un veredicto:
-
-    ALLOW    adelante
-    CONFIRM  hace falta un si explicito del usuario
-    DENY     no, y se dice por que
-
-Las reglas viven en el toml. El codigo no decide politica; la aplica.
+Las reglas viven en el toml: el codigo no decide politica, la aplica.
 """
 from __future__ import annotations
 
@@ -198,22 +192,14 @@ class Policy:
         return Decision(Verdict.CONFIRM, "todo comando de shell se confirma", "shell")
 
     def can_delegate(self, path: Path, writes: bool = False) -> Decision:
-        """Soltar un agente dentro de un directorio.
+        """Soltar un agente dentro de un directorio: el permiso mas fuerte.
 
-        Es el permiso mas fuerte del sistema y por eso tiene el guardia mas
-        estrecho. No es «escribir un archivo»: es delegar en algo que
-        decide por su cuenta que archivos tocar, dirigido por un dictado
-        que a veces oye «Desactual Bluetooth» cuando dijiste «desactivar el
-        Bluetooth». Un encargo mal transcrito dentro de un repo real es una
-        tarde perdida, asi que:
+        No es «escribir un archivo», es delegar en algo que elige por su
+        cuenta que tocar, dirigido por un dictado que a veces oye mal.
 
-        - **Lista blanca explicita.** `agent_roots` vacia = no se delega en
-          ningun sitio. Sin herencia de `write_roots`: que FRIDAY pueda
-          guardar un briefing en Documentos no significa que pueda soltar
-          un agente ahi.
-        - **Leer no es escribir.** «Revisa por que fallan los tests» no
-          toca nada y no interrumpe con una confirmacion; «arregla los
-          tests» si, y espera un «si» dicho en voz alta.
+        - Lista blanca explicita: `agent_roots` vacia = no se delega en
+          ningun sitio, y no hereda de `write_roots`.
+        - Leer no es escribir: revisar corre solo, arreglar espera un «si».
         """
         if not self.enabled:
             return Decision(Verdict.ALLOW, "politica desactivada")
@@ -279,11 +265,10 @@ class Policy:
     def can_control(self, kind: str) -> Decision:
         """Control directo del escritorio: `media`, `session` o `clipboard`.
 
-        Cada uno tiene su interruptor porque el riesgo no se parece en nada:
-        bajar el volumen se deshace subiendolo; bloquear la sesion te deja
-        fuera; leer el portapapeles ve lo ultimo que copiaste, que a menudo
-        es una contraseña. Un solo `allow_control` los trataria igual, y
-        entonces habilitar lo util obligaria a habilitar lo delicado.
+        Un interruptor cada uno porque el riesgo no se parece: el volumen se
+        deshace solo, la sesion te deja fuera y el portapapeles a veces tiene
+        una contraseña. Con un solo `allow_control`, habilitar lo util
+        obligaria a habilitar lo delicado.
         """
         if not self.enabled:
             return Decision(Verdict.ALLOW, "politica desactivada")
@@ -297,20 +282,16 @@ class Policy:
                             f"el control de {kind} esta deshabilitado",
                             f"policy.allow_{kind}")
 
-        # La sesion se confirma siempre, aunque este permitida: «bloquea» mal
-        # transcrito no puede echarte de la maquina sin que lo digas dos veces.
+        # La sesion se confirma siempre: «bloquea» mal transcrito no puede
+        # echarte de la maquina sin que lo digas dos veces.
         if kind == "session":
             return Decision(Verdict.CONFIRM, "bloquear o suspender se confirma", "session")
         return Decision(Verdict.ALLOW)
 
     def can_fetch(self, url: str) -> Decision:
-        """Descargar una pagina para leerla. Distinto de abrirla.
-
-        `can_web` autoriza entregarle una URL al navegador del usuario: la
-        peticion la hace Chrome, con su sesion y sus cookies. `can_fetch`
-        autoriza que **FRIDAY** salga a la red por su cuenta. Es un permiso
-        mas fuerte y por eso tiene su propio interruptor.
-        """
+        """Descargar una pagina para leerla. Distinto de abrirla: `can_web`
+        entrega la URL al navegador del usuario, con su sesion y sus cookies;
+        esto autoriza que **FRIDAY** salga a la red por su cuenta."""
         if not self.enabled:
             return Decision(Verdict.ALLOW, "politica desactivada")
         if not self.allow_web_fetch:
@@ -325,8 +306,8 @@ class Policy:
         if not host:
             return Decision(Verdict.DENY, "URL sin host", "hard-deny")
 
-        # La red local no es «la web». Que una URL dictada por voz alcance el
-        # router o un servicio interno no es una funcion, es un accidente.
+        # La red local no es «la web»: que una URL dictada alcance el router
+        # o un servicio interno es un accidente, no una funcion.
         if host in ("localhost", "::1") or host.endswith(".local") or \
                 host.startswith(("127.", "10.", "192.168.", "169.254.")) or \
                 any(host.startswith(f"172.{n}.") for n in range(16, 32)):

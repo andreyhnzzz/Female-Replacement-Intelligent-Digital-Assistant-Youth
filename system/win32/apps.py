@@ -3,14 +3,11 @@
 Cuatro fuentes, porque ninguna sola cubre lo que el usuario llama "una
 aplicacion":
 
-  1. **Menu Inicio** (`*.lnk`) — lo clasico, y lo mas barato de leer.
-  2. **`Get-StartApps`** — todo lo que el usuario ve en el menu, incluidas
-     las apps empaquetadas (Store/UWP), que no dejan acceso directo. Se
-     lanzan por `shell:AppsFolder\\<AppID>`.
-  3. **Steam** — los juegos no ponen `.lnk` en ningun sitio. Viven en
-     `steamapps/appmanifest_*.acf`, un VDF plano que se lee con una regex.
-     Se lanzan por `steam://rungameid/<appid>`, que es una URI y ya la
-     contempla el lanzador.
+  1. **Menu Inicio** (`*.lnk`) — lo clasico y lo mas barato de leer.
+  2. **`Get-StartApps`** — incluye las apps empaquetadas (Store/UWP), que no
+     dejan acceso directo. Se lanzan por `shell:AppsFolder\\<AppID>`.
+  3. **Steam** — los juegos no ponen `.lnk`; viven en
+     `steamapps/appmanifest_*.acf` y se lanzan por `steam://rungameid/<id>`.
   4. **PATH y URIs del sistema** — `code`, `ms-settings:`, la papelera.
 
 Se cachea en memoria con TTL: la fuente 2 levanta un PowerShell y la 3 lee

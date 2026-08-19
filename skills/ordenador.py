@@ -1,29 +1,15 @@
 """SKILL — ordenador: control directo de la maquina, decidido por el motor.
 
-## Por que esto no son mas expresiones regulares
+La regex solo lleva **a la skill**; que accion es y con que argumentos lo
+elige el motor contra `CATALOGO`, declarado como datos. Es la excepcion al
+enrutado por regex del resto: «bajale», «esto suena altisimo» y «ponlo a la
+mitad» son la misma intencion con cero palabras en comun, y una regex por
+variante es una carrera que se pierde.
 
-El resto de skills enrutan con regex, y esta bien: «abre Spotify» siempre
-quiere decir lo mismo y resolverlo en 0 ms sin gastar una llamada es una
-virtud, no una carencia.
-
-Pero el control del escritorio no se comporta asi. «Bajale», «esto suena
-altisimo», «no te oigo», «ponlo a la mitad» y «subele dos rayas» son la misma
-familia de intencion con cero palabras en comun, y cada una lleva un argumento
-distinto dentro. Escribir una regex por variante es una carrera que se pierde:
-siempre falta la forma en que el usuario lo dijo hoy.
-
-Asi que aqui la regex solo sirve para llegar **a la skill**. Que accion
-concreta es, y con que argumentos, lo decide el motor contra un catalogo
-declarado como datos. Añadir una capacidad es añadir una `Accion` a la tupla
-de abajo — ni un patron nuevo, ni una rama nueva.
-
-## Y por que sigue habiendo un guardia
-
-Que el motor elija no significa que el motor mande. Lo que devuelve es una
-*propuesta*: nombre de accion y argumentos. Antes de tocar nada se comprueba
-que la accion existe, que el puerto esta disponible y que la politica la
-permite. Un modelo que alucine `borrar_disco` se estrella contra un catalogo
-que no lo contiene.
+**El motor propone, no dispone.** Lo que devuelve se valida contra el catalogo
+(lista blanca), contra el puerto disponible y contra la politica. Un
+`borrar_disco` alucinado se estrella contra un catalogo que no lo contiene.
+Añadir una capacidad es una entrada en la tupla mas su rama en `_aplicar`.
 """
 from __future__ import annotations
 
@@ -66,10 +52,9 @@ CATALOGO: tuple[Accion, ...] = (
            "sube o baja el volumen. 'cuanto' es positivo para subir y "
            "negativo para bajar, en puntos porcentuales (10 = un poco, 30 = mucho)",
            puerto="media", control="media", args=("cuanto",),
-           # Los ejemplos llevan el ARGUMENTO, no solo la frase. Un 8B
-           # elegia bien la accion en «no te oigo» y le ponia -20: entendio
-           # que hablabamos de volumen y no de que direccion. La descripcion
-           # explica el signo en abstracto; el ejemplo lo enseña.
+           # Los ejemplos llevan el ARGUMENTO, no solo la frase: la
+           # descripcion explica el signo en abstracto, el ejemplo lo enseña.
+           # Sin eso un 8B acertaba la accion y erraba la direccion.
            ejemplos=("subele -> +15", "no te oigo -> +20",
                      "mas alto -> +20", "baja el volumen -> -15",
                      "esto suena altisimo -> -30", "bajale un poco -> -10")),
@@ -85,10 +70,9 @@ CATALOGO: tuple[Accion, ...] = (
            "controla QUE suena, no a que volumen. 'accion' es exactamente uno "
            "de: play_pause, next, prev, stop",
            puerto="media", control="media", args=("accion",),
-           # «Saltate esta cancion» se lo llevaba `volumen_cambiar` con un 8B:
-           # ambas son «de audio», y sin un ejemplo cercano el modelo pequeño
-           # se queda con la accion mas comun. Los ejemplos no son adorno del
-           # prompt, son lo unico que separa dos acciones vecinas.
+           # «Saltate esta cancion» se la llevaba `volumen_cambiar`: ambas son
+           # «de audio» y sin ejemplo cercano gana la accion mas comun. Los
+           # ejemplos son lo unico que separa dos acciones vecinas.
            ejemplos=("pausa", "siguiente cancion", "saltate esta cancion",
                      "quita esta cancion", "vuelve a la anterior", "para la musica")),
     Accion("copiar",
@@ -123,14 +107,11 @@ class OrdenadorSkill(Skill):
     triggers = [
         r"\bvolumen\b", r"\bsube(le)?\b", r"\bbaja(le)?\b", r"\bsilencia\b",
         r"\bmutea?\b", r"\bpausa\b", r"\breanuda\b", r"\bsiguiente canci[oó]n\b",
-        # Llegar a la skill sin gastar motor: cual de las nueve acciones es
-        # lo sigue decidiendo el, pero ya no paga la llamada de enrutado.
         r"\bs[aá]ltate\b", r"\bsalta (esta|la) canci[oó]n\b",
         r"\bcanci[oó]n anterior\b", r"\bportapapeles\b", r"\bcopia(me)?\b",
         r"\bqu[eé] tengo copiado\b", r"\bbloquea\b", r"\bsuspende\b",
         r"\bminimiza\b", r"\bno te (oigo|escucho)\b", r"\bqu[ií]tale (el )?sonido\b",
-        # Formas sin verbo propio: llegan a la skill, pero cual de las nueve
-        # acciones son —y con que nivel— lo sigue decidiendo el motor.
+        # Formas sin verbo propio: llegan a la skill igual.
         r"\bponlo (a|en)\b", r"\bd[eé]jalo en\b", r"\ba la mitad\b",
         r"\bm[aá]s (alto|bajo|fuerte|flojo)\b", r"\bsuena (muy|demasiado)\b",
     ]
@@ -163,10 +144,8 @@ class OrdenadorSkill(Skill):
     # ══════════════════════════════ decidir (el motor, no un guion)
     async def _decidir(self, ctx: SkillContext,
                        disponibles: list[Accion]) -> tuple[Accion, dict, str] | None:
-        # Los ejemplos van en su propia linea, no pegados a la descripcion:
-        # con un 8B, una linea que mezcla nombre, argumentos, descripcion y
-        # ejemplos se lee como un parrafo y las acciones vecinas se
-        # confunden entre si.
+        # Los ejemplos van en su propia linea: mezclados con la descripcion,
+        # un 8B lee el bloque como un parrafo y confunde acciones vecinas.
         catalogo = "\n\n".join(
             f"{a.nombre}({', '.join(a.args)})\n  que hace: {a.describe}"
             + (f"\n  se pide asi: {'; '.join(a.ejemplos)}" if a.ejemplos else "")
@@ -176,27 +155,21 @@ class OrdenadorSkill(Skill):
             f"ACCIONES POSIBLES:\n\n{catalogo}\n\n"
             "Nombres validos, copia uno tal cual:\n"
             + ", ".join(a.nombre for a in disponibles) + ", ninguna\n\n"
-            # La frase del usuario va AL FINAL, pegada a la respuesta. Un
-            # modelo pequeño atiende mucho mejor a lo ultimo que leyo: con
-            # la peticion arriba del catalogo, elegia la primera accion de
-            # la lista casi siempre.
+            # La peticion AL FINAL, pegada a la respuesta: arriba del
+            # catalogo, un 8B elegia la primera entrada de la lista (6/12).
             f"EL USUARIO DIJO:\n\"{ctx.text.strip()}\"\n\n"
             "Elige la accion de la lista que corresponde a esa frase.\n\n"
             "Responde SOLO este JSON, sin nada mas:\n"
-            # Los valores de la plantilla son EJEMPLOS PLAUSIBLES, no ceros.
-            # Un modelo pequeño copia la plantilla tal cual: con
-            # `"confianza": 0.0` ahi, devolvia 0.0 siempre y el umbral
-            # tiraba la accion. El hueco que dejas es la respuesta que te dan.
+            # Valores de ejemplo plausibles, nunca ceros: el hueco que dejas
+            # es la respuesta que te dan, y con `0.0` devolvia 0.0 siempre.
             '{"accion": "nombre_de_la_lista", "args": {"cuanto": 20}, '
             '"confianza": 0.9, "porque": "por que la elegiste"}'
         )
 
-        # El esquema acota `accion` a la lista: donde el backend lo soporte,
-        # inventarse un nombre deja de ser posible en vez de solo estar mal.
-        #
-        # `confianza` queda OPCIONAL a proposito. Exigirla no hace que el
-        # modelo la estime: hace que la rellene. Un 8B ponia `0` en todas y
-        # el umbral tiraba acciones perfectamente elegidas.
+        # El `enum` hace imposible inventarse un nombre donde el backend lo
+        # soporte. `confianza` queda opcional: exigirla no hace que el modelo
+        # la estime, hace que la rellene con 0 y el umbral tire buenas
+        # acciones.
         schema = enum_schema(
             {"accion": [a.nombre for a in disponibles] + ["ninguna"],
              "args": "object", "confianza": "number", "porque": "string"},
@@ -223,27 +196,18 @@ class OrdenadorSkill(Skill):
     # ── tolerancia con la forma, no con el fondo ──────────────────
     @staticmethod
     def _normaliza(nombre: Any) -> str:
-        """«Volumen Cambiar», «volumen-cambiar» y «volumen_cambiar» son lo mismo.
-
-        La lista blanca sigue siendo la lista blanca: esto normaliza la
-        forma del nombre, no admite nombres que no esten en ella.
-        """
+        """«Volumen Cambiar» y «volumen-cambiar» son `volumen_cambiar`.
+        Normaliza la forma; no admite nombres fuera de la lista blanca."""
         return re.sub(r"[\s\-]+", "_", str(nombre).strip().lower())
 
     @staticmethod
     def _confianza(valor: Any) -> float:
         """Cuanta confianza declaro el modelo.
 
-        **Que falte no es que dude.** Un modelo pequeño omite campos de
-        metadatos constantemente, y tratar la ausencia como cero significaba
-        tirar acciones perfectamente elegidas y contestar «no me quedo
-        claro» — el fallo mas caro que tenia esta skill, porque suena a
-        «no se hacer eso» cuando en realidad si sabia.
-
-        No se afloja ninguna garantia real al hacerlo: la accion sigue
-        teniendo que estar en el catalogo, el puerto sigue teniendo que
-        existir y la politica sigue mandando. Este numero nunca fue el
-        guardia; es una señal del modelo sobre si mismo.
+        **Que falte no es que dude**: un modelo pequeño omite metadatos todo
+        el rato, y tratar la ausencia como cero tiraba acciones bien elegidas
+        contestando «no me quedo claro». No afloja nada — el guardia es el
+        catalogo, el puerto y la politica; esto es solo una señal.
         """
         if valor is None or (isinstance(valor, str) and not valor.strip()):
             return CONFIANZA_MINIMA
@@ -259,12 +223,8 @@ class OrdenadorSkill(Skill):
 
     @staticmethod
     def _args(valor: Any) -> dict[str, Any]:
-        """Los argumentos, vengan como vengan.
-
-        Un modelo pequeño a veces mete el objeto anidado como texto
-        (`"args": "{\\"cuanto\\": 25}"`). Es la misma respuesta correcta con
-        una comilla de mas.
-        """
+        """Los argumentos, vengan como vengan: un modelo pequeño a veces mete
+        el objeto anidado como texto. Misma respuesta, una comilla de mas."""
         if isinstance(valor, dict):
             return valor
         if isinstance(valor, str) and valor.strip():

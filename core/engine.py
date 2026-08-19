@@ -1,19 +1,12 @@
-"""Adaptadores de motor.
+"""Adaptadores de motor. FRIDAY pasa un prompt y recibe texto.
 
-FRIDAY no sabe quien piensa. Le pasa un prompt a un Engine y recibe texto.
+  1. Adaptadores — Claude Code, API de Anthropic, Ollama y cualquier endpoint
+     del dialecto OpenAI. Mismo contrato para todos.
+  2. Roster — los modelos alcanzables y sus alias hablados. Vive en el toml.
+  3. `EngineSwitch` — la fachada que sostienen router y skills, para que
+     cambiar de modelo a media conversacion no invalide ninguna referencia.
 
-Aqui viven tres cosas:
-
-  1. Los **adaptadores** — Claude Code, API de Anthropic, Ollama, cualquier
-     endpoint compatible con OpenAI. Todos cumplen el mismo contrato.
-  2. El **roster** — el catalogo de modelos alcanzables, con los alias que el
-     usuario puede decir en voz alta. Vive en el toml, no en el codigo.
-  3. El **conmutador** (`EngineSwitch`) — la fachada que Router y skills
-     sostienen. Cambiar de Opus a Sonnet a media conversacion no invalida
-     ninguna referencia porque nadie sostiene el motor concreto: sostienen
-     el conmutador.
-
-Nada fuera de este archivo sabe que existe Claude. El roster es datos.
+Nada fuera de este archivo sabe que existe Claude (regla 3).
 """
 from __future__ import annotations
 
@@ -36,13 +29,9 @@ from .proc import NO_WINDOW
 class Engine(ABC):
     name = "base"
 
-    # ¿Este adaptador sabe trabajar dentro de un repo — leer archivos,
-    # correr herramientas, iterar — o solo entra texto y sale texto?
-    #
-    # Es una capacidad, no una marca. Una skill puede preguntar «¿hay
-    # motor agentico?» sin preguntar «¿eres Claude?», que es lo que la
-    # regla 3 del CLAUDE.md prohibe. Si mañana otro backend sabe hacerlo,
-    # pone el flag y la skill no cambia.
+    # ¿Sabe trabajar dentro de un repo, o solo entra texto y sale texto?
+    # Es una capacidad, no una marca: deja preguntar «¿hay motor agentico?»
+    # sin preguntar «¿eres Claude?» (regla 3).
     agentic_capable = False
 
     def __init__(self, cfg: Config):
@@ -59,16 +48,10 @@ class Engine(ABC):
     # -- helper compartido -------------------------------------------
     @staticmethod
     def _loosen(candidate: str) -> str:
-        """Repara la sintaxis que un modelo pequeño rompe mas a menudo.
+        """Repara comas colgantes, comillas simples y literales de Python.
 
-        No es tolerancia por gusto: un 8B que eligio la accion correcta no
-        puede perderla por una coma colgante. Tres arreglos, todos seguros
-        porque solo se aplican si el `json.loads` estricto ya fallo:
-
-        - comas antes de `}` o `]`
-        - comillas simples, cuando no hay ni una doble (`{'a': 'b'}`)
-        - literales de Python (`True`, `False`, `None`), que salen cuando el
-          modelo imita un dict en vez de un JSON
+        Un 8B que eligio bien la accion no puede perder el turno por una
+        coma. Solo se aplica si el `json.loads` estricto ya fallo.
         """
         s = re.sub(r",\s*([}\]])", r"\1", candidate)
         if '"' not in s and "'" in s:
@@ -119,26 +102,15 @@ class Engine(ABC):
 class ClaudeCodeEngine(Engine):
     """Claude Code headless (`claude -p`) como motor.
 
-    Dos modos, y la diferencia importa:
+    Dos modos: **razonamiento** (por defecto) va sin herramientas ni cwd de
+    repo —los archivos los escribe Python—, y **agentico** devuelve
+    herramientas y cwd. Esos tres van por llamada y no por constructor:
+    cada encargo elige su proyecto, y leer no lleva la misma caja que
+    arreglar tests.
 
-    - **razonamiento** (por defecto): `--tools ""` y `--system-prompt` propio.
-      Sin herramientas, sin cwd agentico, sin ruido de git. Es un LLM puro que
-      entra texto y saca texto. Los archivos los escribe FRIDAY en Python —
-      por eso el motor no necesita tocar disco.
-
-    - **agentico** (`agentic=True`): le devolvemos las herramientas y el cwd
-      del proyecto. Para cuando de verdad quieres que trabaje en el repo.
-      El directorio, las herramientas y el modo de permisos van **por
-      llamada**, no por constructor: «metete en mi-proyecto» elige un cwd
-      distinto en cada frase, y una tarea de solo lectura no puede recibir
-      la misma caja de herramientas que una que arregla tests.
-
-    El prompt viaja por **stdin**, no por argv: en Windows el shim .CMD de npm
-    destroza los argumentos largos con saltos de linea y comillas.
-
-    Coste de arranque: cada llamada levanta un proceso de Node. Son ~1-2s de
-    latencia fija que no dependen del modelo. Si te sobra ese peaje, el
-    backend `anthropic_api` habla con la misma familia de modelos por HTTP.
+    El prompt viaja por stdin: en Windows el shim .CMD de npm destroza los
+    argumentos largos. Cada llamada levanta un proceso de Node (~1-2 s fijos);
+    si ese peaje sobra, `anthropic_api` va por HTTP.
     """
 
     name = "claude_code"
@@ -182,10 +154,9 @@ class ClaudeCodeEngine(Engine):
         cwd = self.cwd
         if agentic:
             perm = str(kw.get("permission_mode") or self.perm)
-            # `bypassPermissions` no se acepta ni pidiendolo. Este motor lo
-            # dirige un STT que se equivoca; si una tarea necesita saltarse
-            # los permisos, la respuesta correcta es que la hagas tu en la
-            # terminal. Que el toml pueda pedirlo no lo hace legitimo.
+            # No se acepta ni pidiendolo desde el toml: a este motor lo dirige
+            # un STT que se equivoca. Si algo necesita saltarse permisos, se
+            # hace a mano en la terminal.
             if perm == "bypassPermissions":
                 perm = "acceptEdits"
             tools = kw.get("tools") or self.tools
@@ -212,8 +183,8 @@ class ClaudeCodeEngine(Engine):
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             creationflags=NO_WINDOW,      # sin consola: ver core/proc.py
         )
-        # Un encargo agentico puede tardar minutos; un turno hablado, no.
-        # Por eso el tope viaja en la llamada y no solo en el constructor.
+        # El tope viaja en la llamada: un encargo agentico puede tardar
+        # minutos y un turno hablado no.
         timeout = float(kw.get("timeout") or self.timeout)
         try:
             out, err = await asyncio.wait_for(
@@ -249,17 +220,9 @@ class ClaudeCodeEngine(Engine):
 
 # ------------------------------------------------- API de Anthropic
 class AnthropicAPIEngine(Engine):
-    """Claude por HTTP directo. El camino corto.
-
-    Frente a `claude_code`: no levanta Node, no cruza el shim .CMD de npm y
-    no arrastra el system prompt de un agente de codigo. Una peticion HTTP y
-    ya. En una maquina normal eso son 1-2 segundos menos **por turno**, que
-    en un asistente de voz se notan mas que en cualquier benchmark.
-
-    A cambio necesita `ANTHROPIC_API_KEY` y factura por token, mientras que
-    `claude_code` viaja en tu suscripcion. Por eso conviven: el conmutador
-    salta de uno a otro sin reiniciar nada.
-    """
+    """Claude por HTTP directo: 1-2 s menos por turno que `claude_code`, que
+    levanta Node en cada llamada. A cambio necesita `ANTHROPIC_API_KEY` y
+    factura por token. Conviven; el conmutador salta sin reiniciar."""
 
     name = "anthropic_api"
     ENDPOINT = "/v1/messages"
@@ -345,10 +308,8 @@ class OllamaEngine(Engine):
             "stream": False,
             "options": {"temperature": kw.get("temperature", 0.3)},
         }
-        # Ollama sabe forzar JSON valido a nivel de decodificacion, y con un
-        # esquema puede acotar hasta los valores. Es la diferencia entre
-        # pedirle amablemente a un 8B que no se invente una accion y que no
-        # pueda hacerlo: gramatica, no buenos modales.
+        # Fuerza JSON en la decodificacion, y con esquema acota los valores:
+        # gramatica en vez de buenos modales.
         if kw.get("json_schema"):
             payload["format"] = kw["json_schema"]
         elif kw.get("json_mode"):
@@ -374,14 +335,10 @@ class OllamaEngine(Engine):
 
 # --------------------------------------------- OpenAI-compatible
 class OpenAICompatEngine(Engine):
-    """Cualquier endpoint con el contrato `/chat/completions`.
-
-    Cubre lo local (llama.cpp, LM Studio, vLLM, text-generation-webui) y
-    tambien lo remoto: OpenAI, Groq, OpenRouter, DeepSeek y la capa de
-    compatibilidad de Gemini hablan el mismo dialecto. Cambiar de uno a
-    otro es `base_url` + `api_key_env`, sin codigo nuevo. Por eso no hay un
-    adaptador por proveedor: seria el mismo archivo cuatro veces.
-    """
+    """Cualquier endpoint con el contrato `/chat/completions`: llama.cpp, LM
+    Studio, vLLM, OpenAI, Groq, OpenRouter, DeepSeek y la capa compatible de
+    Gemini. Cambiar de proveedor es `base_url` + `api_key_env`; un adaptador
+    por marca seria el mismo archivo cuatro veces."""
 
     name = "openai_compat"
 
@@ -406,8 +363,6 @@ class OpenAICompatEngine(Engine):
         payload: dict[str, Any] = {
             "model": kw.get("model") or self.model, "messages": msgs,
             "temperature": kw.get("temperature", 0.3), "stream": False}
-        # El equivalente en el dialecto de OpenAI. Lo soportan llama.cpp,
-        # LM Studio, vLLM y los proveedores en nube.
         if kw.get("json_schema"):
             payload["response_format"] = {
                 "type": "json_schema",
@@ -438,12 +393,9 @@ class OpenAICompatEngine(Engine):
 
 
 # ══════════════════════════════════════════ pedir JSON, sin rezar
-# El system prompt de una llamada con contrato. Es DELIBERADAMENTE seco: la
-# persona (`config/persona.md`) define el tono, y un tono no cabe dentro de
-# un JSON. Mandar cuatro kilobytes de carácter en una llamada que solo tiene
-# que devolver `{"accion": ...}` es lo que hace que un 8B se ponga a hablar
-# en personaje en vez de contestar — y ahi el modelo no fallo, fallamos
-# nosotros pidiendole dos cosas incompatibles a la vez.
+# Seco a proposito: la persona da el tono, y un tono no cabe dentro de un
+# JSON. Mandar 4 KB de caracter en una llamada que solo devuelve
+# `{"accion": ...}` pone a un 8B a hablar en personaje.
 JSON_SYSTEM = (
     "Devuelves UNICAMENTE un objeto JSON valido con las claves que te piden. "
     "Sin prosa antes ni despues, sin cerca de codigo, sin explicar nada, sin "
@@ -459,13 +411,11 @@ def enum_schema(campos: dict[str, Any],
         enum_schema({"accion": ["subir", "bajar"], "args": "object"},
                     requeridos=["accion"])
 
-    Un valor lista se vuelve un `enum`; una cadena, un tipo suelto.
+    Un valor lista se vuelve `enum`; una cadena, un tipo suelto.
 
-    **Cuidado con lo que marcas como requerido.** Un campo obligatorio no se
-    lo piensa mas el modelo: se lo inventa. Medido con `llama3.1:8b`: al
-    exigir `confianza`, la rellenaba con `0` en cada respuesta — y un cero
-    debajo del umbral tira la accion aunque estuviera bien elegida. Requiere
-    lo que necesitas para actuar; deja opcional lo que solo es una señal.
+    Cuidado con `requeridos`: un campo obligatorio no se piensa, se inventa
+    (medido con `llama3.1:8b`). Exige lo que necesitas para actuar y deja
+    opcional lo que solo es una señal.
     """
     props: dict[str, Any] = {}
     for clave, valor in campos.items():
@@ -482,28 +432,14 @@ async def ask_json(engine: "Engine", prompt: str, system: str = "",
                    repair: bool = True) -> dict[str, Any] | None:
     """Pide un objeto JSON y devuelve el dict, o None.
 
-    Un solo sitio que concentra lo que hace falta para que un contrato
-    aguante con un modelo pequeño:
+    El unico sitio por el que pasa un contrato JSON, y concentra las cuatro
+    cosas que lo hacen aguantar con un 8B: modo JSON del backend, `schema`
+    (con `enum` el decodificador no PUEDE inventarse un nombre), temperatura
+    0 y sin persona. Si aun asi no hubo JSON, una segunda pasada le devuelve
+    su propia salida y le pide solo el objeto.
 
-      1. **Modo JSON del backend** cuando existe (`format` en Ollama,
-         `response_format` en el dialecto de OpenAI). Deja de ser una
-         peticion educada y pasa a ser gramatica.
-      2. **`schema`, cuando la respuesta debe salir de una lista cerrada.**
-         Es el paso que de verdad cambia las cosas con un 8B: con un `enum`
-         el decodificador **no puede** emitir un nombre que no este en la
-         lista. Medido con `llama3.1:8b`: sin esquema se inventaba la accion
-         `"pausa"` (que no existe en el catalogo) copiando la palabra del
-         usuario. La lista blanca deja de ser solo un filtro de despues y
-         pasa a ser tambien una restriccion de antes.
-      3. **Temperatura 0.** No hay nada creativo que aportar en un contrato.
-      4. **Sin persona.** Ver `JSON_SYSTEM`.
-      5. **Una segunda pasada** si aun asi no hubo JSON: se le devuelve su
-         propia salida y se le pide solo el objeto. Cuesta una llamada de
-         mas, pero solo cuando ya ibamos a perder el turno entero.
-
-    El esquema es una **pista, no una garantia**: los backends que no lo
-    soportan lo ignoran. Por eso la validacion de despues no se toca — sigue
-    haciendo falta, y sigue siendo la que manda.
+    El esquema es una pista, no una garantia — los backends que no lo
+    soportan lo ignoran. La validacion de despues sigue mandando.
     """
     raw = await engine.complete(
         prompt,
@@ -569,15 +505,11 @@ DEFAULT_ROSTER: tuple[dict[str, Any], ...] = (
 
 
 def resolve_model(roster: list[ModelSpec], spoken: str) -> ModelSpec | None:
-    """Resuelve lo que dijo el usuario a una entrada del roster.
+    """Resuelve lo dicho a una entrada del roster: gana el alias mas largo.
 
-    Gana el alias **mas largo** que aparezca en la frase. Sin esa regla,
-    «opus» y «opus cinco» empatarian y el desempate seria el orden del toml.
-    El limite `(?<!\\w)…(?!\\w)` evita que un alias corto se cuele dentro de
-    otra palabra — «haiku» no debe dispararse con «haikus del vault».
-
-    Es funcion suelta, no metodo, porque el enrutado la necesita antes de que
-    exista ningun motor construido.
+    Sin esa regla «opus» y «opus cinco» empatan y decide el orden del toml.
+    El limite de palabra evita que «haiku» se dispare con «haikus del vault».
+    Funcion suelta porque el enrutado la necesita antes de que exista motor.
     """
     blob = _fold(spoken)
     best: tuple[int, ModelSpec] | None = None
@@ -614,15 +546,10 @@ def load_roster(cfg: Config) -> list[ModelSpec]:
 
 # ══════════════════════════════════════════════════ el conmutador
 class EngineSwitch(Engine):
-    """La fachada que todos sostienen.
-
-    Router y skills reciben ESTE objeto, nunca un adaptador concreto. Cuando
-    el usuario dice «cambia a Sonnet», lo que cambia es un campo aqui dentro:
-    ninguna referencia queda colgando y no hay que reconstruir el Router.
-
-    Los adaptadores se instancian **perezosamente** y se cachean. Pedir
-    Ollama no cuesta nada si nunca lo llamas.
-    """
+    """La fachada que todos sostienen: router y skills reciben ESTE objeto,
+    nunca un adaptador concreto, asi que «cambia a Sonnet» solo mueve un
+    campo de aqui dentro. Los adaptadores se construyen perezosamente y se
+    cachean: tener Ollama en el roster no cuesta nada si no lo llamas."""
 
     def __init__(self, cfg: Config):
         super().__init__(cfg)
@@ -676,12 +603,10 @@ class EngineSwitch(Engine):
         return bool(getattr(self.current, "agentic_capable", False))
 
     def agentic_spec(self) -> ModelSpec | None:
-        """Que modelo del roster puede trabajar dentro de un repo.
+        """El activo si sabe trabajar en un repo; si no, el primero que sepa.
 
-        El activo si sabe; si no, el primero que sepa. Devolverlo en vez de
-        conmutar es deliberado: que le encargues una revision a un repo no
-        deberia cambiarte el modelo con el que estabas conversando. La
-        skill usa este spec para esa llamada y solo para esa.
+        Devuelve el spec en vez de conmutar: encargar una revision no puede
+        cambiarte el modelo con el que estabas conversando.
         """
         if self._spec is not None and \
                 getattr(ENGINES.get(self._spec.backend), "agentic_capable", False):

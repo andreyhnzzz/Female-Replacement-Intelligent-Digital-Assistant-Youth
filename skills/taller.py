@@ -1,34 +1,22 @@
-"""SKILL — taller: encargarle trabajo de verdad a un agente, hablando.
+"""SKILL — taller: encargarle trabajo a un agente, hablando.
 
     «Metete en mi-proyecto y revisa por que fallan los tests»
 
-La terminal, pero dictada. Es la capacidad mas peligrosa de FRIDAY y por eso
-es la que mas guardias tiene:
+La capacidad mas peligrosa de FRIDAY, y la que mas guardias tiene:
 
-  1. **Solo en directorios declarados** (`policy.agent_roots`). Vacia por
-     defecto: recien instalado, esta skill no puede hacer nada en ningun
-     sitio. Hay que decir donde, a proposito.
-  2. **El proyecto se reconoce, no se adivina.** El nombre dicho se compara
-     contra los directorios que existen bajo esas raices. Si no hay
-     coincidencia clara, FRIDAY pregunta y no abre nada. Un STT que oye
-     «Desactual Bluetooth» donde dijiste «desactivar el Bluetooth» no
-     puede elegir carpeta por su cuenta.
-  3. **Leer no es escribir.** «Revisa», «explica» y «busca» corren solas
-     con herramientas de solo lectura. «Arregla» y «refactoriza» esperan un
-     «si» dicho en voz alta, repitiendo QUE tarea y EN QUE ruta.
-  4. **Nunca sin permisos.** El modo `bypassPermissions` esta clavado a no
-     en `core/engine.py`. Si una tarea lo necesita, hazla tu en la terminal.
-  5. **Avisa si el repo esta sucio.** Antes de dejar escribir, mira
-     `git status`: si hay cambios sin commitear, lo dice en la confirmacion.
-     Es la diferencia entre poder deshacer el trabajo del agente y no.
+  1. Solo bajo `policy.agent_roots`, vacia de fabrica.
+  2. El proyecto se reconoce contra el disco; si no hay coincidencia clara,
+     pregunta. Un STT que oye «Desactual Bluetooth» no elige carpeta.
+  3. Leer corre solo; escribir espera un «si» que repite tarea y ruta.
+  4. `bypassPermissions` esta clavado a no en `core/engine.py`.
+  5. Avisa si el repo tiene cambios sin commitear: es la diferencia entre
+     poder deshacer el trabajo del agente y no.
 
-Y una decision de forma: el encargo **no bloquea el turno**. Un agente
-tarda minutos; la voz contesta «voy con ello» y el resultado vuelve por el
-bus cuando este. Esperar callados a que termine dejaria a FRIDAY muda y sin
-poder atender nada mas.
+El encargo **no bloquea el turno**: la voz acusa recibo y el resultado vuelve
+por `core.say` cuando este, que pueden ser minutos.
 
-Esta skill no sabe que existe Claude (regla 3). Pide «un motor que sepa
-trabajar en un repo» y el conmutador le da el que haya.
+No sabe que existe Claude (regla 3): pide un motor que sepa trabajar en un
+repo y el conmutador le da el que haya.
 """
 from __future__ import annotations
 
@@ -66,9 +54,8 @@ ESCRITURA = re.compile(
     r"renombra|actualiza|migra|formatea|documenta|commitea|optimiza|"
     r"instala|actualiza|resuelve|soluciona|termina|completa)\b", re.I)
 
-# Carpetas que nunca son un proyecto: salida de compilacion, dependencias
-# y metadatos. Sin este filtro, un arbol Maven aporta `src`, `target`,
-# `classes` y `generated-sources` a la lista de sitios donde trabajar — y
+# Salida de compilacion, dependencias y metadatos: nunca son un proyecto.
+# Sin esto un arbol Maven aporta `src`, `target` y `classes` a la lista, y
 # ademas duplicados, porque cada repo tiene los suyos.
 _NO_PROYECTO = {
     "target", "build", "dist", "out", "bin", "obj", "node_modules",
@@ -88,11 +75,8 @@ _LIMPIA = re.compile(
 
 
 def _fold(s: str) -> str:
-    """Para comparar nombres de carpeta con lo que oyo el microfono.
-
-    `mi-proyecto`, `mi_proyecto` y «mi proyecto» son la misma cosa dicha de
-    tres maneras, y el STT siempre entrega la tercera.
-    """
+    """`mi-proyecto`, `mi_proyecto` y «mi proyecto» son lo mismo dicho de tres
+    maneras, y el STT siempre entrega la tercera."""
     s = unicodedata.normalize("NFKD", s)
     s = "".join(c for c in s if not unicodedata.combining(c))
     return re.sub(r"[^a-z0-9]+", " ", s.lower()).strip()
@@ -121,8 +105,8 @@ class TallerSkill(Skill):
             "read_tools", ["Read", "Glob", "Grep"]))
         self.write_tools = list(self.opts.get(
             "write_tools", ["Read", "Glob", "Grep", "Write", "Edit"]))
-        # Referencias vivas a los encargos en vuelo: sin esto, el recolector
-        # de basura puede llevarse una tarea a medio correr.
+        # Referencias vivas: sin esto el recolector se lleva una tarea a
+        # medio correr.
         self._jobs: set[asyncio.Task] = set()
 
     # ══════════════════════════════════════════════ ejecucion
@@ -134,9 +118,8 @@ class TallerSkill(Skill):
             return SkillResult(ok=False, error="sin politica",
                                speak="No puedo delegar trabajo sin politica.")
 
-        # ¿Hay alguien que sepa trabajar en un repo? Se pregunta por la
-        # capacidad, no por la marca: el conmutador puede tener el modelo
-        # activo en uno que no sabe y otro en el roster que si.
+        # Por capacidad, no por marca: el modelo activo puede no saber y otro
+        # del roster si.
         motor_ok = bool(getattr(ctx.engine, "agentic_capable", False))
         if not motor_ok and hasattr(ctx.engine, "agentic_spec"):
             motor_ok = ctx.engine.agentic_spec() is not None
@@ -192,8 +175,8 @@ class TallerSkill(Skill):
             describe = f"«{tarea}» en {nombre} ({ruta})"
 
             return SkillResult(
-                # El encargo se repite tal cual lo dijiste, no parafraseado:
-                # si el STT lo entendio mal, esta es tu ocasion de oirlo.
+                # El encargo se repite tal cual lo dijiste: si el STT lo
+                # entendio mal, esta es tu ocasion de oirlo.
                 speak=(f"Entendido: {tarea}. En {nombre}."
                        + (" Ojo, tienes cambios sin commitear." if sucio else "")
                        + " ¿Le doy?"),
@@ -213,11 +196,8 @@ class TallerSkill(Skill):
     # ══════════════════════════════════════════════ el encargo
     def _lanzar(self, ctx: SkillContext, nombre: str, ruta: Path,
                 tarea: str, escribe: bool) -> SkillResult:
-        """Arranca el trabajo y devuelve el turno inmediatamente.
-
-        Lo que se devuelve aqui es un acuse de recibo, no el resultado: el
-        resultado llega por el bus cuando el agente termine.
-        """
+        """Arranca el trabajo y devuelve el turno. Lo que sale de aqui es un
+        acuse de recibo; el resultado llega por el bus al terminar."""
         job = asyncio.create_task(
             self._trabajar(ctx, nombre, ruta, tarea, escribe))
         self._jobs.add(job)
@@ -290,20 +270,13 @@ class TallerSkill(Skill):
 
     # ══════════════════════════════════════════════ auxiliares
     def _proyectos(self, policy) -> list[tuple[str, Path]]:
-        """Los directorios candidatos, solo bajo las raices declaradas.
+        """Los candidatos, solo bajo las raices declaradas: la lista blanca no
+        filtra al final, es de donde salen las opciones.
 
-        Se listan en vez de buscarlos por todo el disco: la lista blanca no
-        es un filtro que se aplica al final, es de donde salen las opciones.
-
-        Una raiz puede ser dos cosas distintas y hay que distinguirlas:
-
-        - **Un contenedor** (`~/proyectos`): sus hijos son proyectos.
-        - **Un repo** (`~/proyectos/api`, tiene `.git`): sus hijos son
-          `src`, `config`, `data`... carpetas internas, no proyectos.
-
-        Se reconoce por las marcas (`.git`, `pom.xml`, `package.json`...).
-        Sin esa distincion, «metete en src» seria ambiguo entre los cuatro
-        `src` de tus repos, y esa ambigüedad la paga el disco.
+        Una raiz puede ser un contenedor (sus hijos son proyectos) o ya un
+        repo (sus hijos son `src`, `config`... y no se listan). Se distingue
+        por las marcas; sin eso «metete en src» seria ambiguo entre los
+        cuatro `src` que tengas.
         """
         out: list[tuple[str, Path]] = []
         vistos: set[str] = set()
@@ -352,13 +325,10 @@ class TallerSkill(Skill):
     def _elegir(text: str, proyectos: list[tuple[str, Path]]):
         """Que proyecto nombro el usuario. None si no esta claro.
 
-        Gana el nombre **mas largo** que aparezca en la frase: con
-        `friday` y `friday-docs` en disco, «revisa friday-docs» no puede
-        acabar en `friday` solo porque se leyo antes.
-
-        Y si dos carpetas distintas responden igual de bien, no gana
-        ninguna: preguntar cuesta una frase, equivocarse de repo cuesta
-        una tarde.
+        Gana el nombre mas largo: con `friday` y `friday-docs` en disco,
+        «revisa friday-docs» no puede acabar en `friday`. Si dos empatan no
+        gana ninguna — preguntar cuesta una frase, equivocarse de repo
+        cuesta una tarde.
         """
         blob = _fold(text)
         largo = 0
@@ -394,10 +364,9 @@ class TallerSkill(Skill):
     def _escribe(tarea: str) -> bool:
         """¿La tarea toca archivos?
 
-        Un verbo de escritura manda aunque haya uno de lectura: «revisa y
-        arregla los tests» escribe. Y si no se reconoce ningun verbo,
-        tambien se trata como escritura — no reconocer la intencion no es
-        razon para asumir la version inofensiva.
+        Escribir manda sobre leer: «revisa y arregla los tests» escribe. Y un
+        verbo que no se reconoce cuenta como escritura — no entender la
+        intencion no es razon para asumir la version inofensiva.
         """
         if ESCRITURA.search(tarea):
             return True
@@ -407,11 +376,8 @@ class TallerSkill(Skill):
     def _git_sucio(ruta: Path) -> bool:
         """¿Hay cambios sin commitear que el agente podria pisar?
 
-        Acotado a `-- .`, el subarbol del proyecto. Sin eso, un directorio
-        que casualmente cuelga de otro repo (un temporal dentro de tu
-        perfil versionado, por ejemplo) reporta la suciedad del padre, que
-        no tiene nada que ver con lo que el agente va a tocar — y ademas
-        obliga a recorrerlo entero para averiguarlo.
+        Acotado a `-- .`: un directorio que cuelga de otro repo reportaria la
+        suciedad del padre, que no tiene que ver con lo que el agente toca.
         """
         try:
             proc = subprocess.run(
