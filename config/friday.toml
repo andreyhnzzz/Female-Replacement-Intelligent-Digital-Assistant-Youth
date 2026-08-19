@@ -307,7 +307,7 @@ volume    = 0.9
 # SKILLS
 # ----------------------------------------------------------
 [skills]
-enabled = ["metricas", "inbox", "plan", "vault", "agenda",
+enabled = ["metricas", "inbox", "plan", "vault", "agenda", "memoria",
            "sistema", "archivos", "pantalla", "ordenador", "taller",
            "noticias", "web", "motor"]
 

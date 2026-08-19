@@ -7,6 +7,7 @@ from .agenda import AgendaSkill
 from .archivos import ArchivosSkill
 from .base import PendingAction, Skill, SkillContext, SkillResult
 from .inbox import InboxSkill
+from .memoria import MemoriaSkill
 from .metricas import MetricasSkill
 from .motor import MotorSkill
 from .noticias import NoticiasSkill
@@ -28,6 +29,7 @@ ALL_SKILLS: dict[str, type[Skill]] = {
     "plan": PlanSkill,
     "vault": VaultSkill,
     "agenda": AgendaSkill,
+    "memoria": MemoriaSkill,
     # manos sobre la computadora
     "sistema": SistemaSkill,
     "archivos": ArchivosSkill,
