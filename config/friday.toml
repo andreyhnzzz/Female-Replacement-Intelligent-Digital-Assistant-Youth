@@ -235,6 +235,13 @@ allow_session      = false    # bloquear/suspender: apagado por defecto
 allow_agent        = true     # delegarle trabajo a un agente dentro de un repo
 confirm_over_files = 5        # sobre este numero, pide confirmacion hablada
 
+# Retirar del vault las notas diarias que ya quedaron resumidas en el
+# consolidado. Interruptor propio y no `allow_file_write`: mover un PDF y
+# decidir que dos semanas de diario ya no hacen falta no son lo mismo.
+# Apagalo y FRIDAY seguira consolidando, pero sin quitar nada — el resumen
+# se escribe igual y el disco no baja.
+allow_memory_prune = true
+
 # Donde PUEDE escribir. Fuera de aqui, no.
 write_roots = ["~/Documents", "~/Downloads", "~/Desktop", "~/Pictures"]
 # Donde puede leer y buscar.
@@ -273,6 +280,29 @@ wiki         = "wiki"
 outputs      = "outputs"
 daily_format = "%Y-%m-%d"
 index_ttl_s  = 3
+
+# ── consolidacion ────────────────────────────────────────
+# Cada dia hablado deja una nota en `raw/` y la mayor parte de sus lineas
+# caducan al cumplirse: «abre Spotify», «sube el volumen». A los seis meses
+# son cientos de archivos que no recuerdan nada y que TODA lectura del vault
+# recorre, porque aqui no hay indice (regla 1): la busqueda abre y puntua
+# archivo por archivo. Consolidar es, a la vez, menos disco y notas mas
+# rapidas.
+#
+# FRIDAY lo hace sola cada `every_h` horas, y tambien si se lo pides:
+# «consolida la memoria». Solo toca las diarias de `raw/`: `wiki/` y
+# `outputs/` son notas con nombre propio y esas no se resumen nunca.
+[vault.consolidate]
+enabled     = true
+every_h     = 12             # cada cuanto lo revisa por su cuenta
+keep_days   = 14             # las diarias mas nuevas no se tocan
+min_notes   = 3              # por menos de esto no vale la pena
+max_apuntes = 400            # tope de lineas que viajan al motor de una vez
+target      = "raw/Memoria consolidada.md"
+# Los originales no se borran: van a `vault/.trash/`, que ya no entra en
+# busquedas ni en el grafo, y caducan pasados estos dias. Entre una cosa y
+# la otra hay un mes para comparar el resumen con lo que resumio.
+trash_days  = 30
 
 # ----------------------------------------------------------
 # VOZ  —  100% local. El audio NUNCA sale de este equipo.

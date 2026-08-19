@@ -86,6 +86,7 @@ class Friday:
         }
         self._busy = asyncio.Lock()
         self._stop = asyncio.Event()
+        self._keeper: asyncio.Task | None = None
         self.loop: asyncio.AbstractEventLoop | None = None
 
     # ══════════════════════════════════════════ peticiones
@@ -237,6 +238,59 @@ class Friday:
             except asyncio.TimeoutError:
                 pass
 
+    # ══════════════════════════════════════════ el ama de llaves
+    async def _memory_keeper(self) -> None:
+        """Consolida el diario viejo cada tantas horas, sin decir nada.
+
+        Habla por `core.info`, nunca por `core.say`: es mantenimiento, y una
+        asistente que interrumpe para contar que ordeno sus archivos molesta.
+
+        **El candado del turno solo cubre la escritura.** Leer el vault y
+        pedirle al motor que resuma tarda segundos, y `Bus.emit` espera a sus
+        handlers en linea: si el mantenimiento retuviera `_busy` todo ese
+        rato, cualquier peticion hecha mientras tanto se quedaria esperando
+        sin llegar siquiera al router — con el HUD clavado en «pensando».
+        """
+        from memory.consolidate import Consolidator
+
+        every = max(0.25, float(self.cfg.get("vault.consolidate.every_h", 12))) * 3600
+        con = Consolidator.from_config(self.cfg, self.vault)
+        espera = 120.0                       # el arranque ya tiene bastante
+
+        while True:
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=espera)
+                return                       # nos estamos apagando
+            except asyncio.TimeoutError:
+                pass
+            espera = every
+
+            if self._busy.locked():
+                continue                     # hay turno en curso: ya volvere
+
+            try:
+                plan = await asyncio.to_thread(con.plan)
+                if not plan:
+                    await asyncio.to_thread(con.vault.purge_trash, con.trash_days)
+                    continue
+                resumen = await con.summarize(self.engine, plan)
+                async with self._busy:
+                    rep = con.commit(plan, resumen, self.policy)
+            except Exception as exc:
+                await self.bus.emit("core.error",
+                                    message=f"consolidacion fallida: {exc}")
+                continue
+
+            await self.bus.emit("memory.consolidated", **rep.to_json())
+            detalle = (f"memoria consolidada: {rep.notes} diarias del "
+                       f"{rep.rango} → {rep.kept} apuntes, "
+                       f"{rep.dropped} rutinas fuera")
+            if rep.retired:
+                detalle += f", {rep.shrunk // 1024} KB menos"
+            elif rep.reason:
+                detalle += f" (sin retirar: {rep.reason})"
+            await self.bus.emit("core.info", message=detalle)
+
     # ══════════════════════════════════════════ arranque
     async def start(self, loop: asyncio.AbstractEventLoop | None = None) -> None:
         self.loop = loop or asyncio.get_running_loop()
@@ -280,6 +334,8 @@ class Friday:
             await self._start_voice()
 
         asyncio.create_task(self._tick())
+        if self.cfg.get("vault.consolidate.enabled", True):
+            self._keeper = asyncio.create_task(self._memory_keeper())
         await self.bus.emit("core.info", message="F.R.I.D.A.Y en linea.")
 
     def _seed_vault(self) -> None:
@@ -303,6 +359,8 @@ class Friday:
 
     async def shutdown(self) -> None:
         self._stop.set()
+        if self._keeper:
+            self._keeper.cancel()
         if self.ptt:
             self.ptt.stop()
         if self.tts:
