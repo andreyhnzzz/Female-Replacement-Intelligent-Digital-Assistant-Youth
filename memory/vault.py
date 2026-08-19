@@ -4,6 +4,7 @@ Estructura:
     vault/raw/      captura cruda (transcripciones, volcados)
     vault/wiki/     notas atomicas enlazadas -> el grafo
     vault/outputs/  lo que FRIDAY produce (planes, resumenes)
+    vault/.trash/   lo retirado por la consolidacion, a la espera de caducar
 
 Compatible con Obsidian sin plugins: frontmatter YAML + [[wikilinks]].
 """
@@ -254,6 +255,48 @@ class Vault:
         self.daily()
         stamp = datetime.now().strftime("%H:%M")
         return self.append_section(self.daily_path(), "Log", [f"- `{stamp}` **{kind}** — {text}"])
+
+    # -- retirada -----------------------------------------------------
+    # Una nota consolidada no se borra de golpe. Va a `.trash/`, que
+    # `files()` ya no mira, asi que desaparece de la busqueda y del grafo el
+    # mismo dia; el disco se libera cuando caduca. Entre las dos cosas hay
+    # semanas, y en esas semanas el resumen se puede comparar con el original.
+    @property
+    def trash_dir(self) -> Path:
+        return self.root / ".trash"
+
+    def trash(self, path: Path | str) -> Path:
+        """Retira una nota a la papelera. Devuelve donde quedo."""
+        p = self._resolve(path)
+        self._cache.pop(p, None)
+        self.trash_dir.mkdir(parents=True, exist_ok=True)
+        # El nombre lleva la zona: dos `2026-07-01.md` de zonas distintas se
+        # pisarian, y la que se pierde es la que ya no esta en su sitio.
+        rel = p.relative_to(self.root).as_posix().replace("/", "__")
+        dest = self.trash_dir / rel
+        n = 2
+        while dest.exists():
+            dest = self.trash_dir / f"{Path(rel).stem}-{n}.md"
+            n += 1
+        p.replace(dest)
+        return dest
+
+    def purge_trash(self, older_than_days: float) -> tuple[int, int]:
+        """Vacia lo caducado. Devuelve (archivos, bytes liberados)."""
+        if not self.trash_dir.is_dir():
+            return 0, 0
+        cutoff = (datetime.now() - timedelta(days=older_than_days)).timestamp()
+        files = freed = 0
+        for p in self.trash_dir.glob("*.md"):
+            try:
+                st = p.stat()
+                if st.st_mtime < cutoff:
+                    p.unlink()
+                    files += 1
+                    freed += st.st_size
+            except OSError:
+                continue
+        return files, freed
 
     # -- busqueda -----------------------------------------------------
     def search(self, query: str, limit: int = 12, zone: str | None = None) -> list[Note]:
