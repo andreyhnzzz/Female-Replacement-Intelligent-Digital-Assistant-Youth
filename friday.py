@@ -366,6 +366,13 @@ class Friday:
         if self.tts:
             self.tts.shutup()
             self.tts.stop()
+        # La sesion HTTP se comparte durante todo el proceso para no pagar un
+        # handshake TLS por peticion; alguien tiene que cerrarla.
+        try:
+            from system import net
+            await net.close()
+        except Exception:
+            pass
 
 
 # ══════════════════════════════════════════════ modos de arranque

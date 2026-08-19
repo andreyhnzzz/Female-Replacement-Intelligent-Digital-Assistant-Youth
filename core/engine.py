@@ -20,6 +20,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
 
+from . import http
 from .bus import BUS
 from .config import Config
 from .proc import NO_WINDOW
@@ -260,13 +261,16 @@ class AnthropicAPIEngine(Engine):
 
         headers = {"x-api-key": self.key, "anthropic-version": self.VERSION,
                    "content-type": "application/json"}
-        timeout = aiohttp.ClientTimeout(total=self.timeout)
-        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as s:
-            async with s.post(self.base + self.ENDPOINT, json=payload) as r:
-                if r.status >= 400:
-                    detail = (await r.text())[:300]
-                    raise RuntimeError(f"HTTP {r.status}: {detail}")
-                data = await r.json()
+        # El tope viaja en la llamada (un encargo largo no dura lo que un
+        # turno hablado); la sesion se comparte para no pagar TLS cada vez.
+        timeout = aiohttp.ClientTimeout(total=float(kw.get("timeout") or self.timeout))
+        s = await http.session()
+        async with s.post(self.base + self.ENDPOINT, json=payload,
+                          headers=headers, timeout=timeout) as r:
+            if r.status >= 400:
+                detail = (await r.text())[:300]
+                raise RuntimeError(f"HTTP {r.status}: {detail}")
+            data = await r.json()
 
         # content es una lista de bloques; nos quedamos con el texto
         return "".join(b.get("text", "") for b in data.get("content", [])
@@ -279,11 +283,12 @@ class AnthropicAPIEngine(Engine):
         try:
             headers = {"x-api-key": self.key, "anthropic-version": self.VERSION}
             to = aiohttp.ClientTimeout(total=10)
-            async with aiohttp.ClientSession(timeout=to, headers=headers) as s:
-                async with s.get(f"{self.base}/v1/models") as r:
-                    if r.status >= 400:
-                        return False, f"HTTP {r.status}"
-                    data = await r.json()
+            s = await http.session()
+            async with s.get(f"{self.base}/v1/models", headers=headers,
+                             timeout=to) as r:
+                if r.status >= 400:
+                    return False, f"HTTP {r.status}"
+                data = await r.json()
             ids = [m.get("id", "") for m in data.get("data", [])][:3]
             return True, ", ".join(i for i in ids if i) or "anthropic api"
         except Exception as exc:
@@ -314,19 +319,20 @@ class OllamaEngine(Engine):
             payload["format"] = kw["json_schema"]
         elif kw.get("json_mode"):
             payload["format"] = "json"
-        timeout = aiohttp.ClientTimeout(total=self.timeout)
-        async with aiohttp.ClientSession(timeout=timeout) as s:
-            async with s.post(f"{self.host}/api/generate", json=payload) as r:
-                r.raise_for_status()
-                return (await r.json()).get("response", "")
+        timeout = aiohttp.ClientTimeout(total=float(kw.get("timeout") or self.timeout))
+        s = await http.session()
+        async with s.post(f"{self.host}/api/generate", json=payload,
+                          timeout=timeout) as r:
+            r.raise_for_status()
+            return (await r.json()).get("response", "")
 
     async def health(self) -> tuple[bool, str]:
         import aiohttp
         try:
             to = aiohttp.ClientTimeout(total=5)
-            async with aiohttp.ClientSession(timeout=to) as s:
-                async with s.get(f"{self.host}/api/tags") as r:
-                    tags = await r.json()
+            s = await http.session()
+            async with s.get(f"{self.host}/api/tags", timeout=to) as r:
+                tags = await r.json()
             names = [m["name"] for m in tags.get("models", [])][:4]
             return True, ", ".join(names) or "ollama"
         except Exception as exc:
@@ -371,22 +377,31 @@ class OpenAICompatEngine(Engine):
         elif kw.get("json_mode"):
             payload["response_format"] = {"type": "json_object"}
         headers = {"Authorization": f"Bearer {self.key}"}
-        timeout = aiohttp.ClientTimeout(total=self.timeout)
-        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as s:
-            async with s.post(f"{self.base}/chat/completions", json=payload) as r:
-                if r.status >= 400:
-                    raise RuntimeError(f"HTTP {r.status}: {(await r.text())[:300]}")
-                data = await r.json()
-        return data["choices"][0]["message"]["content"]
+        timeout = aiohttp.ClientTimeout(total=float(kw.get("timeout") or self.timeout))
+        s = await http.session()
+        async with s.post(f"{self.base}/chat/completions", json=payload,
+                          headers=headers, timeout=timeout) as r:
+            if r.status >= 400:
+                raise RuntimeError(f"HTTP {r.status}: {(await r.text())[:300]}")
+            data = await r.json()
+
+        # Indexar a pelo aqui daba un KeyError crudo mientras los otros tres
+        # adaptadores devuelven un RuntimeError con el motivo. El dialecto
+        # «compatible» lo hablan seis proveedores y no todos igual de bien.
+        try:
+            return data["choices"][0]["message"]["content"] or ""
+        except (KeyError, IndexError, TypeError) as exc:
+            raise RuntimeError(
+                f"respuesta inesperada del endpoint: {str(data)[:200]}") from exc
 
     async def health(self) -> tuple[bool, str]:
         import aiohttp
         try:
             headers = {"Authorization": f"Bearer {self.key}"} if self.key else {}
             to = aiohttp.ClientTimeout(total=5)
-            async with aiohttp.ClientSession(timeout=to, headers=headers) as s:
-                async with s.get(f"{self.base}/models") as r:
-                    data = await r.json()
+            s = await http.session()
+            async with s.get(f"{self.base}/models", headers=headers, timeout=to) as r:
+                data = await r.json()
             return True, str(data.get("data", [{}])[0].get("id", "local"))
         except Exception as exc:
             return False, str(exc)[:120]
