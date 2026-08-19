@@ -27,6 +27,8 @@ class LocalSTT:
         self._model: Any = None
         self.ready = False
         self.info = ""
+        self.on_error: Any = None
+        self._en_cpu = False
 
     # -- carga ---------------------------------------------------------
     def load(self, allow_download: bool = False) -> None:
@@ -79,6 +81,52 @@ class LocalSTT:
         if peak > 0:
             audio = audio / max(peak, 1e-6) * 0.95   # normaliza, ayuda al modelo
 
+        try:
+            return self._run(audio, peak)
+        except Exception as exc:
+            if not self._cuda_inservible(exc):
+                raise
+            self._rescatar_en_cpu(exc)
+            return self._run(audio, peak)
+
+    def _cuda_inservible(self, exc: Exception) -> bool:
+        """¿El fallo es que CUDA no se puede usar de verdad?
+
+        CTranslate2 carga cuBLAS/cuDNN en la PRIMERA transcripcion, no al
+        construir el modelo. Por eso `load()` anuncia «cuda» tan tranquilo,
+        el PTT se arma, y la voz muere justo cuando hablas: contar GPUs
+        (`_has_cuda`) ve la tarjeta pero no ve que falte una DLL del runtime.
+        """
+        if self._en_cpu or "/cuda/" not in self.info:
+            return False
+        m = str(exc).lower()
+        return any(s in m for s in ("cublas", "cudnn", "cuda", "library"))
+
+    def _rescatar_en_cpu(self, exc: Exception) -> None:
+        """Rehace el modelo en CPU y lo cuenta. Sorda no se queda."""
+        from faster_whisper import WhisperModel
+
+        previo = self.info
+        # `local_files_only` no es opcional: esto corre dentro de
+        # `privacy.sealed()`, asi que salir a la red aborta la transcripcion.
+        self._model = WhisperModel(self.model_name, device="cpu",
+                                   compute_type=self.compute,
+                                   local_files_only=True)
+        self._en_cpu = True
+        self.info = f"{self.model_name}/cpu/{self.compute} (rescate)"
+        self._aviso(f"CUDA no es utilizable ({exc}); STT continua en CPU "
+                    f"el resto de la sesion. Venia de {previo}.")
+
+    def _aviso(self, texto: str) -> None:
+        """Una degradacion de la voz, contada donde se pueda leer."""
+        if self.on_error is None:
+            return
+        try:
+            self.on_error(texto)
+        except Exception:
+            pass                          # no vamos a perder la voz por el log
+
+    def _run(self, audio: np.ndarray, peak: float) -> dict[str, Any]:
         t0 = time.time()
         segments, info = self._model.transcribe(
             audio,
