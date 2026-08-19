@@ -9,7 +9,8 @@ Python 3.12, asyncio + Qt/QML + QtQuick3D. Corre local. **No es una app web.**
    índice persistente. Lo que necesite ser rápido se cachea en RAM y se
    reconstruye leyendo archivos. Que no haya índice es lo que hace que el
    **número de archivos** sea el coste dominante de cada lectura, y por eso
-   la memoria se consolida sola (ver abajo): la respuesta a «esto crece» no
+   la memoria se consolida sola (ver abajo), y el cache de notas lleva
+   techo (LRU) porque un proceso que corre todo el dia no puede crecer sin fin: la respuesta a «esto crece» no
    es una base de datos, es tirar lo que no había que recordar.
 2. **El audio no sale del equipo.** No agregues clientes HTTP a `voice/`.
    `core/privacy.py` bloquea sockets no-loopback durante el pipeline de audio.
@@ -83,7 +84,11 @@ repo. Cinco invariantes, y ninguna es opcional:
    cuenta como escritura: no entender la intencion no es razon para asumir la
    version inofensiva.
 4. **`bypassPermissions` esta clavado a no en `core/engine.py`**, aunque el
-   toml lo pida.
+   toml lo pida. Y la **caja de herramientas se filtra contra la politica**:
+   `read_tools`/`write_tools` salen del toml, asi que sin filtro meter
+   `Bash` en la lista de lectura —que corre sin confirmar— era ejecucion
+   arbitraria con `allow_shell` en false. Declarar algo en el toml no es
+   concederselo (regla 6).
 5. **No bloquea el turno.** `_lanzar()` devuelve el acuse y el resultado sale
    por `core.say`. Si esto se rompe, FRIDAY se queda muda los minutos que dure.
 
@@ -134,6 +139,12 @@ Cuatro invariantes:
    recorre, así que sale de búsquedas el mismo día y del disco a los 30.
    Sin política, se resume pero no se retira.
 
+5. **Solo se retira lo que no cambio desde que se leyo.** `plan` corre
+   fuera del candado y `commit` dentro, con minutos de motor en medio.
+   Lo que el usuario escriba en esa ventana no esta en el resumen, asi
+   que retirarlo seria perderlo. `Plan.huellas` guarda `(mtime, size)`
+   de cada fuente y `commit` las revalida.
+
 Las tres fases —`plan`, `summarize`, `commit`— están separadas y **no es
 estética**: las dos primeras son consultas lentas sin efecto y la tercera es
 el único comando. El ciclo autónomo toma `_busy` solo para `commit`. Envolver
@@ -176,6 +187,10 @@ optimizar Python, es **no hacer dos llamadas donde basta una**:
 - **Prompts**: cada llamada declara su propio formato. `config/persona.md` define
   el **tono**, nunca la estructura — si metes un contrato JSON ahí, pelea con el
   de cada skill y todo cae al fallback.
+- **`enum_schema` no exige ningun campo si no se lo dices.** El default era
+  «todos obligatorios», que es justo lo que esta medido como malo: un
+  campo obligatorio no se piensa, se inventa. Exige solo lo que necesitas
+  para actuar.
 - **Toda llamada con contrato JSON va por `core/engine.py::ask_json`**, nunca
   por `complete()` + `extract_json()` a mano. Concentra las cuatro cosas que
   hacen que el contrato aguante con un 8B: modo JSON del backend
@@ -249,6 +264,20 @@ Dos cosas que no son opcionales ahí:
   (`_busy.locked()`), el mantenimiento se salta el ciclo.
 - **El trabajo pesado va en `asyncio.to_thread`.** Recorrer el vault entero
   en el bucle de eventos congela el HUD y retrasa cada evento del bus.
+
+### Nada puede fallar en silencio
+
+- **No uses `print` para reportar un fallo.** Produccion arranca con
+  `pythonw.exe`: sin consola `sys.stdout` es None y CPython **descarta el
+  `print` sin decir nada**. El rastro se perdia justo en el unico modo en que
+  el programa corre siempre, y seis de esos `print` estaban en `voice/tts.py`
+  — el fallo mas dificil de diagnosticar era el que menos huella dejaba. Va
+  por `Bus.report` (o `on_error`, si el modulo no puede ver el bus).
+- **Reportar un fallo no puede reemitirse por el bus.** Si el que fallo estaba
+  suscrito al tema del error, emitir ahi lo llama otra vez: bucle.
+  `Bus.report` escribe en `_history` y en la bitacora, y no pasa por `emit`.
+- **Un `Future` de `run_coroutine_threadsafe` sin `add_done_callback` se traga
+  la excepcion.** El hilo que la provoco ya siguio a lo suyo.
 
 ### Motor y sistema
 - **Windows + npm shim**: pasar prompts largos por argv a `claude.CMD` los
@@ -330,6 +359,26 @@ probabilístico es lo que pasa cuando se equivoca:
 - **Python 3.14 no sirve**: `faster-whisper` no tiene wheels. El venv es 3.12.
 
 ### Red
+- **No parsees el host de una URL a mano.** `can_fetch` partia la cadena por
+  `://`, `/`, `@` y `:`, y con `http://[::1]/x` el ultimo `split` dejaba
+  `host = "["`. O sea que el chequeo de `::1` escrito ahi mismo no podia
+  dispararse nunca. Entraban ademas `2130706433` y `0x7f000001` (127.0.0.1 en
+  decimal y en hex, que Windows resuelve), IPv6 entero, `0.0.0.0` y
+  `169.254.169.254`. Va `urlsplit().hostname` + `ipaddress`, y **una sola**
+  comprobacion —`is_private`— que ya cubre loopback, RFC1918, enlace local,
+  ULA y sin especificar. Escribir los rangos a mano es lo que dejaba IPv6
+  fuera.
+- **Un nombre publico puede resolver a 127.0.0.1.** La comprobacion literal no
+  puede verlo; hace falta DNS. Va en `policy.resolves_to_local`, **aparte** de
+  `can_fetch`: uno es puro y decide en microsegundos, el otro bloquea. Los une
+  `system/net.py::authorize`, que corre el caro en un hilo.
+- **Autorizar un redirect despues de seguirlo no sirve de nada.** Con
+  `allow_redirects=True` la peticion a la URL interna **ya se hizo**; tirar la
+  respuesta no deshace un GET al router. Los saltos se siguen a mano, con
+  tope, autorizando cada uno antes de pedirlo.
+- **Una `ClientSession` por peticion es un handshake TLS por peticion.**
+  Medido: 247 ms → 73 ms contra `es.wikipedia.org`. La sesion compartida vive
+  en `core/http.py` y la cierra `friday.py::shutdown`.
 - **El User-Agent necesita un contacto.** Wikimedia devuelve **403 a todo**
   —API REST, action API, todo— si el UA no lleva una forma de contacto entre
   paréntesis. Y fingir ser Chrome está explícitamente bloqueado: la opción que
@@ -387,8 +436,8 @@ probabilístico es lo que pasa cuando se equivoca:
 ## Verificar cambios
 
 ```powershell
-.\.venv\Scripts\python scripts\smoke_test.py     # 101 · memoria, consolidación, skills, enrutado
-.\.venv\Scripts\python scripts\system_test.py    # 135 · política, puertos, red, motor, taller, PTT
+.\.venv\Scripts\python scripts\smoke_test.py     # 107 · memoria, consolidación, skills, enrutado
+.\.venv\Scripts\python scripts\system_test.py    # 160 · política, puertos, red, motor, taller, PTT
 .\.venv\Scripts\python friday.py --check         # dependencias, roster y capacidades
 .\.venv\Scripts\python scripts\ui_preview.py     # solo la interfaz, iteración rápida
 ```

@@ -5,6 +5,101 @@ medidas en la máquina de referencia, no estimadas.
 
 ---
 
+## 2026-08-18 (noche) — auditoría
+
+Repaso de calidad, seguridad y rendimiento sobre todo el repo. Lo que sigue
+son defectos encontrados leyendo y **midiendo**, no reescrituras de gusto.
+Las pruebas pasaron de 236 a 267.
+
+### Seguridad
+
+- **`policy.can_fetch` era evadible de siete formas.** El host se sacaba
+  partiendo la cadena a mano, y `[::1]` roto por `:` daba `[`, así que el
+  propio chequeo de loopback IPv6 escrito ahí no podía dispararse nunca.
+  Entraban: `2130706433` (127.0.0.1 en decimal), `0x7f000001` (en hex),
+  `[::1]`, `[fd00::1]` y `[fe80::1]` (IPv6 entero, que no estaba cubierto),
+  `0.0.0.0`, `usuario@127.0.0.1` y `169.254.169.254` (metadatos de nube).
+  Ahora el host sale de `urlsplit`, las tres notaciones se normalizan con
+  `ipaddress` y una sola comprobación —`is_private`— cubre loopback, RFC1918,
+  enlace local, ULA y sin especificar. Un puerto no numérico también deniega.
+- **Un nombre público que resuelve a 127.0.0.1 seguía entrando** (`localtest.me`).
+  Se añadió `policy.resolves_to_local`, que consulta el DNS. Va **aparte** de
+  `can_fetch` a propósito: `can_fetch` es puro y decide en microsegundos, y
+  esto bloquea, así que `system/net.py::authorize` lo corre en un hilo. Los
+  dos juntos en un único sitio, para que ninguna skill se quede con la mitad
+  barata (regla 6).
+- **Los redirects se autorizaban después de haberlos pedido.** Con
+  `allow_redirects=True`, aiohttp ya había hecho la petición a la URL interna
+  antes de que nadie pudiera mirarla; descartar la respuesta no deshace un GET
+  al router. Ahora los saltos se siguen a mano, con tope de 5, autorizando
+  cada uno **antes**.
+- **El toml podía otorgar permisos que la política no daba.** `skills/taller`
+  tomaba `read_tools`/`write_tools` del toml sin filtrarlas: meter `Bash` en
+  `read_tools` convertía una tarea de solo lectura —que corre **sin
+  confirmar**— en ejecución arbitraria, con `policy.allow_shell` en `false` y
+  sin enterarse. Ahora `Bash`, `Task`, `WebFetch` y compañía se filtran contra
+  su interruptor, y lo retirado se dice en el panel en vez de desaparecer.
+
+### Corregido
+
+- **Los fallos dentro de un handler del bus no dejaban rastro.** Iban a
+  `print`, y producción arranca con `pythonw.exe`: sin consola `sys.stdout` es
+  None y CPython se come el `print` en silencio. El rastro se perdía justo en
+  el único modo en que el programa corre siempre — y seis de esos `print`
+  estaban en `voice/tts.py`, o sea que el fallo más difícil de diagnosticar
+  («FRIDAY se queda muda») era el que menos huella dejaba. Ahora hay
+  `Bus.report`, que escribe en `_history` y en la bitácora sin reemitir por el
+  bus, que sería un bucle. No queda ningún `print` fuera de los scripts.
+- **`emit_threadsafe` se tragaba las excepciones** del `Future` y usaba
+  `get_event_loop()`, deprecado y capaz de reventar en un hilo sin bucle.
+- **El ama de llaves podía retirar una nota modificada mientras resumía.**
+  `plan` corre fuera del candado y `commit` dentro, con minutos de motor en
+  medio; lo que el usuario escribiera en esa ventana se retiraba sin estar en
+  el resumen. `Plan` guarda ahora la huella `(mtime, size)` de cada fuente y
+  solo se retira lo que sigue igual. Quinta invariante de la consolidación.
+- **`skills/vault` pedía `links` al motor y los tiraba.** El grafo se
+  construye leyendo `[[...]]` del cuerpo, no del JSON, así que un modelo que
+  rellenaba la lista y dejaba el markdown limpio perdía el enlace.
+- **`enum_schema` marcaba todos los campos como obligatorios** cuando no se
+  decía nada — justo lo que este repo tiene medido como malo («un campo
+  obligatorio no se piensa, se inventa»). La advertencia estaba en el
+  docstring y el default hacía lo contrario. Ahora no exige nada por defecto.
+- **`OpenAICompatEngine` daba un `KeyError` crudo** ante una respuesta rara,
+  donde los otros tres adaptadores devuelven un `RuntimeError` con el motivo.
+- **El argumento `timeout` lo ignoraban tres de los cuatro adaptadores.**
+- **Las suites reventaban si stdout no era UTF-8** (tubería, redirección, CI):
+  `UnicodeEncodeError` a media pasada, que parece un fallo de las pruebas.
+
+### Rendimiento
+
+- **174 ms menos por petición de red.** Se construía una `ClientSession` por
+  llamada, o sea un handshake TCP+TLS por llamada, en los cuatro adaptadores
+  del motor y en `system/net.py`. Medido contra `es.wikipedia.org`: **247 ms →
+  73 ms** por petición tras la primera, con la conexión reutilizada del pool.
+  Pesa justo donde no debe: `anthropic_api` existe para ahorrar el arranque de
+  Node, y pagaba ese peaje por el otro lado. La sesión vive en `core/http.py`
+  —la usan `core` y `system`, y `system` ya depende de `core`— y la cierra
+  `friday.py::shutdown`.
+- **`taller._proyectos` salió del bucle de eventos.** Recorre el disco por
+  niveles con un `exists()` por cada marca de repo; en el hilo de asyncio eso
+  congela el HUD al empezar el turno. `_git_sucio`, tres líneas más abajo, ya
+  lo hacía bien.
+- **El caché del vault tiene techo** (LRU de 512). Guardaba el cuerpo entero
+  de cada nota sin límite, y la única purga vivía dentro de `all_notes()`, así
+  que dependía de que llamaras a ese método. Un proceso que corre todo el día
+  no tenía límite superior de RAM.
+
+### Medido
+
+- La ruta rápida cuesta **150-230 µs** para las 14 skills, contra ~4 s de una
+  llamada al motor: 20.000× más barata. La apuesta del router se sostiene.
+- `"y eso cuanto cuesta"` puntúa **0,64** contra `metricas`, por encima del
+  umbral de 0,62: sin el paso de seguimiento por delante, preguntar por un
+  precio devuelve el uso de CPU. La trampa documentada es real.
+- `"que tal estas"` puntúa 0,00 en las 14 skills y cae en `chat-fast`.
+
+---
+
 ## 2026-08-18 (tarde)
 
 ### Corregido
