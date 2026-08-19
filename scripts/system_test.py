@@ -205,6 +205,28 @@ async def main() -> int:
     check("bloquea esquemas que no son http",
           not policy.can_fetch("file:///C:/Windows/win.ini").allowed,
           policy.can_fetch("file:///C:/Windows/win.ini").reason)
+    # Estas siete entraban. El parser partia la cadena a mano y `[::1]`
+    # acababa siendo `[`, asi que el propio chequeo de loopback IPv6 que
+    # habia escrito no podia dispararse nunca.
+    evasiones = {
+        "decimal": "http://2130706433/x",
+        "hexadecimal": "http://0x7f000001/x",
+        "loopback IPv6": "http://[::1]/x",
+        "ULA IPv6": "http://[fd00::1]/x",
+        "enlace local IPv6": "http://[fe80::1]/x",
+        "sin especificar": "http://0.0.0.0/x",
+        "userinfo delante": "http://usuario@127.0.0.1:8080/x",
+        "metadatos de nube": "http://169.254.169.254/latest/meta-data",
+    }
+    for nombre, u in evasiones.items():
+        check(f"no cuela loopback en {nombre}", not policy.can_fetch(u).allowed, u)
+    check("mayusculas no esquivan localhost",
+          not policy.can_fetch("http://LOCALHOST/x").allowed)
+    check("un puerto roto no revienta el guardia",
+          not policy.can_fetch("http://ejemplo.com:puerto/x").allowed)
+    check("una web publica normal sigue pasando",
+          policy.can_fetch("https://es.wikipedia.org/wiki/Python").allowed)
+
     check("respeta la lista negra de hosts",
           not Policy(FakeCfg(sandbox, blocked_hosts=["*.malo.com"]))
           .can_fetch("https://x.malo.com/a").allowed)

@@ -9,11 +9,14 @@ Las reglas viven en el toml: el codigo no decide politica, la aplica.
 from __future__ import annotations
 
 import fnmatch
+import ipaddress
 import os
+import socket
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 
 class Verdict(str, Enum):
@@ -46,6 +49,58 @@ _HARD_DENY = (
 
 # Extensiones que nunca se ejecutan ni se renombran en masa.
 _DANGEROUS_EXT = {".sys", ".dll", ".drv", ".efi", ".msi", ".scr", ".cpl"}
+
+
+# ── direcciones: lo que parece un host y a donde apunta de verdad ──
+def _hostname(url: str) -> str:
+    """El host de una URL, sin corchetes de IPv6, sin puerto y sin userinfo.
+
+    A mano no sale bien: `urlsplit` ya desenvuelve `[::1]`, descarta el
+    `usuario@` y separa el `:puerto` — tres sitios donde un `split` casero
+    se equivoca y deja pasar lo que creia estar bloqueando.
+    """
+    try:
+        partes = urlsplit(url.strip())
+        partes.port                         # valida el puerto: lanza si no es un numero
+        return (partes.hostname or "").strip().lower()
+    except ValueError:                      # puerto no numerico, IPv6 mal cerrado
+        return ""
+
+
+def _as_ip(host: str):
+    """El host como direccion IP, o None si es un nombre.
+
+    Acepta las tres formas que designan la misma maquina: `127.0.0.1`,
+    `2130706433` (decimal) y `0x7f000001` (hex). Windows resuelve las tres,
+    asi que bloquear solo la primera no bloquea nada.
+    """
+    try:
+        return ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    try:
+        if host.startswith(("0x", "0X")):
+            entero = int(host, 16)
+        elif host.isdigit():
+            entero = int(host, 10)
+        else:
+            return None
+        if 0 <= entero <= 0xFFFFFFFF:
+            return ipaddress.ip_address(entero)
+    except ValueError:
+        pass
+    return None
+
+
+def _is_local_ip(direccion) -> bool:
+    """¿Esta IP vive dentro de la red del usuario?
+
+    `is_private` es una sola comprobacion que ya cubre loopback, RFC1918,
+    enlace local, ULA de IPv6 y `0.0.0.0`. Escribir los rangos a mano es lo
+    que dejaba fuera IPv6 entero.
+    """
+    return bool(direccion.is_private or direccion.is_reserved
+                or direccion.is_multicast or direccion.is_unspecified)
 
 
 class Policy:
@@ -298,19 +353,28 @@ class Policy:
             return Decision(Verdict.DENY, "leer paginas de la red esta deshabilitado",
                             "policy.allow_web_fetch")
 
-        low = url.strip().lower()
-        if not low.startswith(("http://", "https://")):
+        try:
+            esquema = urlsplit(url.strip()).scheme.lower()
+        except ValueError:
+            return Decision(Verdict.DENY, "URL ilegible", "hard-deny")
+        if esquema not in ("http", "https"):
             return Decision(Verdict.DENY, "solo http/https", "hard-deny")
 
-        host = low.split("://", 1)[1].split("/", 1)[0].split("@")[-1].split(":")[0]
+        host = _hostname(url)
         if not host:
             return Decision(Verdict.DENY, "URL sin host", "hard-deny")
 
         # La red local no es «la web»: que una URL dictada alcance el router
         # o un servicio interno es un accidente, no una funcion.
-        if host in ("localhost", "::1") or host.endswith(".local") or \
-                host.startswith(("127.", "10.", "192.168.", "169.254.")) or \
-                any(host.startswith(f"172.{n}.") for n in range(16, 32)):
+        #
+        # Partir la cadena a mano no servia. `[::1]` roto por `:` daba `[`,
+        # que no se parece a nada de la lista, asi que el chequeo de `::1`
+        # que habia aqui no podia dispararse nunca; y `2130706433` es
+        # 127.0.0.1 sin un solo punto. Lo resuelven `_hostname` y `_as_ip`.
+        literal = _as_ip(host)
+        if literal is not None and _is_local_ip(literal):
+            return Decision(Verdict.DENY, "direccion de red local", "hard-deny")
+        if host == "localhost" or host.endswith((".local", ".localhost", ".internal")):
             return Decision(Verdict.DENY, "direccion de red local", "hard-deny")
 
         for pat in self.blocked_hosts:
@@ -318,6 +382,41 @@ class Policy:
                 return Decision(Verdict.DENY, f"«{pat}» esta en la lista negra",
                                 "policy.blocked_hosts")
 
+        return Decision(Verdict.ALLOW)
+
+    def resolves_to_local(self, url: str) -> Decision:
+        """La otra mitad de `can_fetch`: ¿a que IP apunta ese nombre?
+
+        Va aparte porque **consulta el DNS**, y eso bloquea hasta segundos.
+        `can_fetch` es puro y decide en microsegundos; separarlos deja el
+        permiso barato, comprobable sin red y usable desde el bucle de
+        eventos, y confina el paso caro a un hilo (ver `system/net.py`).
+
+        Cierra el unico hueco que la comprobacion literal no puede ver: un
+        nombre publico que resuelve a 127.0.0.1. Sin esto, `localtest.me`
+        entra andando.
+        """
+        if not self.enabled:
+            return Decision(Verdict.ALLOW, "politica desactivada")
+
+        host = _hostname(url)
+        if not host:
+            return Decision(Verdict.DENY, "URL sin host", "hard-deny")
+        if _as_ip(host) is not None:
+            return Decision(Verdict.ALLOW, "literal, ya lo vio can_fetch")
+
+        try:
+            infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+        except (OSError, UnicodeError):
+            return Decision(Verdict.DENY, f"no se pudo resolver «{host}»", "hard-deny")
+
+        for info in infos:
+            direccion = _as_ip(str(info[4][0]))
+            # Un nombre que no sabemos a donde apunta tampoco se visita.
+            if direccion is None or _is_local_ip(direccion):
+                return Decision(Verdict.DENY,
+                                f"«{host}» resuelve a una direccion local",
+                                "hard-deny")
         return Decision(Verdict.ALLOW)
 
     # ── para el acompanante ───────────────────────────────────────

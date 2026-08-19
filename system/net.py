@@ -15,11 +15,18 @@ Nada de esto vive en `voice/`. El audio no habla con la red, nunca.
 """
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
+from urllib.parse import urljoin
 
-from core.policy import Policy
+from core.http import close, session   # noqa: F401 — reexportadas a proposito
+from core.policy import Decision, Policy
 
 DEFAULT_MAX_BYTES = 512 * 1024
+
+# Los saltos se siguen a mano para poder autorizar cada uno; hay que ponerles
+# tope o una cadena circular gira para siempre.
+MAX_REDIRECTS = 5
 
 # Contacto por defecto. Cambialo en `[system] contact` por el tuyo.
 DEFAULT_CONTACT = "https://github.com/topics/friday-desktop-companion"
@@ -47,6 +54,22 @@ def user_agent(contact: str = "") -> str:
 UA = user_agent()
 
 
+async def authorize(url: str, policy: Policy) -> Decision:
+    """El permiso completo de salida: el barato y el que consulta el DNS.
+
+    `can_fetch` es puro y decide en microsegundos. `resolves_to_local` sale
+    al DNS y bloquea, asi que va en un hilo — si no, una resolucion lenta
+    congela el bucle de eventos justo cuando FRIDAY esta contestando.
+
+    Los dos juntos aqui, y aqui solo, para que ninguna skill pueda quedarse
+    con la mitad barata y saltarse la otra (regla 6).
+    """
+    decision = policy.can_fetch(url)
+    if not decision.allowed:
+        return decision
+    return await asyncio.to_thread(policy.resolves_to_local, url)
+
+
 @dataclass(frozen=True, slots=True)
 class Fetched:
     """Resultado de una descarga. `error` vacio = salio bien."""
@@ -71,10 +94,6 @@ async def fetch(url: str, policy: Policy, *, timeout_s: float = 12.0,
     una respuesta hablada; una excepcion de red no debe convertirse en
     «la skill noticias fallo» cuando lo util es decir que feed no contesto.
     """
-    decision = policy.can_fetch(url)
-    if not decision.allowed:
-        return Fetched(url, error=decision.reason)
-
     try:
         import aiohttp
     except ImportError:
@@ -82,21 +101,34 @@ async def fetch(url: str, policy: Policy, *, timeout_s: float = 12.0,
 
     headers = {"User-Agent": ua or UA, "Accept": accept,
                "Accept-Language": "es-ES,es;q=0.9,en;q=0.6"}
+    actual = url
     try:
         to = aiohttp.ClientTimeout(total=timeout_s)
-        async with aiohttp.ClientSession(timeout=to, headers=headers) as s:
-            async with s.get(url, allow_redirects=True) as r:
-                if r.status >= 400:
-                    return Fetched(url, status=r.status, error=f"HTTP {r.status}")
+        sesion = await session(timeout_s)
+        for _ in range(MAX_REDIRECTS + 1):
+            permiso = await authorize(actual, policy)
+            if not permiso.allowed:
+                extra = "" if actual == url else "redirigio a una URL bloqueada: "
+                return Fetched(url, error=f"{extra}{permiso.reason}")
 
-                # Redirigir a red local esquivaria can_fetch: se revalida el
-                # destino final, no solo el que pedimos.
-                final = str(r.url)
-                if final != url:
-                    again = policy.can_fetch(final)
-                    if not again.allowed:
-                        return Fetched(url, status=r.status,
-                                       error=f"redirigio a {again.reason}")
+            # `allow_redirects=False` no es un detalle: con los saltos
+            # automaticos, aiohttp YA pidio la URL interna antes de que
+            # nadie pudiera mirarla. Descartar la respuesta despues no
+            # deshace la peticion, y un GET al router ya tuvo su efecto.
+            async with sesion.get(actual, headers=headers, timeout=to,
+                                  allow_redirects=False) as r:
+                if r.status in (301, 302, 303, 307, 308):
+                    destino = r.headers.get("Location", "")
+                    if not destino:
+                        return Fetched(actual, status=r.status,
+                                       error=f"HTTP {r.status} sin destino")
+                    # `urljoin` resuelve el Location relativo («/otra») contra
+                    # el que acabamos de pedir; absoluto lo deja igual.
+                    actual = urljoin(actual, destino)
+                    continue                    # el permiso se rehace arriba
+
+                if r.status >= 400:
+                    return Fetched(actual, status=r.status, error=f"HTTP {r.status}")
 
                 chunks: list[bytes] = []
                 total = 0
@@ -114,7 +146,10 @@ async def fetch(url: str, policy: Policy, *, timeout_s: float = 12.0,
                     body = raw.decode(enc, "replace")
                 except (LookupError, TypeError):
                     body = raw.decode("utf-8", "replace")
-                return Fetched(final, body=body, status=r.status, truncated=truncated)
+                return Fetched(actual, body=body, status=r.status,
+                               truncated=truncated)
+
+        return Fetched(url, error=f"demasiados saltos (mas de {MAX_REDIRECTS})")
 
     except Exception as exc:
         return Fetched(url, error=f"{type(exc).__name__}: {exc}"[:160])
