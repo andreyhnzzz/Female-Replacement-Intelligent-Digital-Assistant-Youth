@@ -198,6 +198,7 @@ class Friday:
         await self.bus.emit("core.info", message=f"voz: {self.tts.backend} ({self.tts.info})")
 
         self.stt = LocalSTT(self.cfg)
+        self.stt.on_error = self.logbook.line
         allow_dl = self.args.allow_model_download
 
         def _load_stt() -> None:
