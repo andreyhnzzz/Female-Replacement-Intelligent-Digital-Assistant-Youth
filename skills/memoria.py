@@ -180,7 +180,7 @@ class MemoriaSkill(Skill):
     @staticmethod
     def _panel(rep, con: Consolidator, retirado: bool) -> str:
         lineas = [
-            f"# Memoria consolidada",
+            "# Memoria consolidada",
             "",
             f"**{rep.rango}**",
             "",

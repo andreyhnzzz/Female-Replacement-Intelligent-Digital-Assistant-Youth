@@ -59,7 +59,7 @@ class InboxSkill(Skill):
         except Exception as exc:
             body = ("## Lo que importa hoy\n" +
                     "\n".join(f"- [ ] {t} — [[{s}]]" for s, t in open_todos[:3]) +
-                    f"\n\n## Se movio\n" + ("\n".join(digest[:4]) or "- (nada)") +
+                    "\n\n## Se movio\n" + ("\n".join(digest[:4]) or "- (nada)") +
                     f"\n\n> motor no disponible: {exc}")
 
         today = datetime.now().strftime("%Y-%m-%d")

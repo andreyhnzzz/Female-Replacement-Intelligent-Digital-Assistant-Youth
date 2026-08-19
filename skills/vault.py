@@ -76,6 +76,16 @@ class VaultSkill(Skill):
         if not body:
             body = payload
 
+        # El contrato pide `links` aparte **y** enlaces dentro del cuerpo. Un
+        # modelo pequeño rellena a menudo solo la lista y deja el markdown
+        # limpio; entonces el enlace no existe, porque el grafo se construye
+        # leyendo `[[...]]` del cuerpo y no del JSON. Se recuperan aqui los
+        # que falten, en vez de pedir un campo y tirarlo.
+        faltan = [x for x in links if x and f"[[{x}]]" not in body]
+        if faltan:
+            body = body.rstrip() + "\n\nRelacionado: " + " ".join(
+                f"[[{x}]]" for x in faltan)
+
         rel = f"{ctx.vault.wiki.name}/{slugify(title)}.md"
         mode = "append" if ctx.vault.exists(rel) else "create"
         note = ctx.vault.write(

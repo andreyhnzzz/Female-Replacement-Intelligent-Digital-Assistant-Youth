@@ -13,6 +13,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+# La salida lleva flechas y acentos. Si stdout no es UTF-8 —tuberia,
+# redireccion, CI— `print` revienta con UnicodeEncodeError y aborta la
+# suite a media pasada, que parece un fallo de las pruebas y no lo es.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 from core.config import load as load_config
 from core.engine import Engine
 from core.router import Router

@@ -428,9 +428,15 @@ def enum_schema(campos: dict[str, Any],
 
     Un valor lista se vuelve `enum`; una cadena, un tipo suelto.
 
-    Cuidado con `requeridos`: un campo obligatorio no se piensa, se inventa
-    (medido con `llama3.1:8b`). Exige lo que necesitas para actuar y deja
-    opcional lo que solo es una señal.
+    **`requeridos` no tiene default generoso, y es deliberado.** Un campo
+    obligatorio no se piensa: se inventa. Marcar `confianza` como `required`
+    hacia que `llama3.1:8b` la rellenara con `0` en todas, y el umbral tiraba
+    acciones bien elegidas. Omitir el argumento no exige nada; exige tu lo
+    que necesitas para actuar y deja opcional lo que solo es una señal.
+
+    Antes esto ponia `list(campos)` —todo obligatorio— cuando no se pasaba
+    nada, o sea que el valor por defecto era justo el que estaba medido como
+    malo, con la advertencia escrita aqui en vez de aplicada abajo.
     """
     props: dict[str, Any] = {}
     for clave, valor in campos.items():
@@ -439,7 +445,7 @@ def enum_schema(campos: dict[str, Any],
         else:
             props[clave] = {"type": str(valor)}
     return {"type": "object", "properties": props,
-            "required": list(campos) if requeridos is None else list(requeridos)}
+            "required": list(requeridos or [])}
 
 
 async def ask_json(engine: "Engine", prompt: str, system: str = "",

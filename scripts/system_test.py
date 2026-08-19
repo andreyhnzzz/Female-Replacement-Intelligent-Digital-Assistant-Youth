@@ -17,6 +17,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+# La salida lleva flechas y acentos. Si stdout no es UTF-8 —tuberia,
+# redireccion, CI— `print` revienta con UnicodeEncodeError y aborta la
+# suite a media pasada, que parece un fallo de las pruebas y no lo es.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 from core.config import load as load_config
 from core.engine import Engine
 from core.policy import Policy, Verdict
@@ -943,6 +949,8 @@ async def main() -> int:
     route = await router.decide("si")
     check("lo pendiente caduca", route.skill != "_confirm" and not marca["corrio"])
 
+    # ══════════════════ LO QUE NO PUEDE DECLARARSE POR TOML ══════════════════
+    print()
     print("  ── el toml no otorga permisos ──")
     from skills.taller import _tools_permitidas
 
@@ -1003,6 +1011,17 @@ async def main() -> int:
 
     # ══════════════════ EL ESQUEMA NO EXIGE DE MAS ══════════════════
     print()
+    print("  ── el contrato JSON no se inventa campos ──")
+    from core.engine import enum_schema
+
+    esq = enum_schema({"accion": ["subir", "bajar"], "confianza": "number"})
+    check("sin decir nada, no hay campos obligatorios", esq["required"] == [],
+          "un campo requerido no se piensa, se rellena con 0")
+    esq2 = enum_schema({"accion": ["subir"], "confianza": "number"},
+                       requeridos=["accion"])
+    check("y se exige lo que se pide", esq2["required"] == ["accion"])
+    check("el enum sigue acotando", esq["properties"]["accion"]["enum"] == ["subir", "bajar"])
+
     shutil.rmtree(sandbox, ignore_errors=True)
     shutil.rmtree(vault.root, ignore_errors=True)
 
