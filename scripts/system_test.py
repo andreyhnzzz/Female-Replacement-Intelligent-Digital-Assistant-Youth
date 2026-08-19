@@ -959,6 +959,33 @@ async def main() -> int:
 
     # ══════════════════ EL BUS CUENTA LO QUE REVIENTA ══════════════════
     print()
+    print("  ── nada falla en silencio ──")
+    from core.bus import Bus
+
+    bus = Bus()
+    dicho: list[str] = []
+    bus.on_error = dicho.append
+
+    async def handler_roto(ev):
+        raise RuntimeError("reventé")
+
+    bus.on("prueba.tema", handler_roto)
+    await bus.emit("prueba.tema", x=1)
+    check("un handler roto no tumba el bus", True)
+    check("y el fallo llega a la bitacora",
+          any("reventé" in d for d in dicho), dicho[0] if dicho else "(nada)")
+    check("y queda como evento consultable",
+          any(e["topic"] == "core.error" for e in bus.recent(prefix="core.error")))
+
+    bus2 = Bus()
+    bus2.on_error = dicho.append
+    bus2.on("core.error", handler_roto)      # el que falla escucha core.error
+    await bus2.emit("core.error", message="x")
+    check("informar de un fallo no entra en bucle", True,
+          "core.error no se reemite por el bus")
+
+    # ══════════════════ EL CACHE DEL VAULT TIENE TECHO ══════════════════
+    print()
     shutil.rmtree(sandbox, ignore_errors=True)
     shutil.rmtree(vault.root, ignore_errors=True)
 

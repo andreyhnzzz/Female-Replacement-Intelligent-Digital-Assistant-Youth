@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING
 
 from .agenda import AgendaSkill
 from .archivos import ArchivosSkill
+from core.bus import BUS
+
 from .base import PendingAction, Skill, SkillContext, SkillResult
 from .inbox import InboxSkill
 from .memoria import MemoriaSkill
@@ -50,7 +52,10 @@ def build_skills(cfg: "Config") -> dict[str, Skill]:
     for name in enabled:
         cls = ALL_SKILLS.get(name)
         if cls is None:
-            print(f"[skills] desconocida, la ignoro: {name}")
+            # Una skill mal escrita en `skills.enabled` es un error de
+            # configuracion silencioso: la capacidad simplemente no esta.
+            BUS.report(f"skill desconocida en skills.enabled, la ignoro: "
+                       f"{name}", origen="skills")
             continue
         out[name] = cls(cfg)
     return out

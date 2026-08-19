@@ -190,6 +190,7 @@ class Friday:
         from voice.tts import LocalTTS
 
         self.tts = LocalTTS(self.cfg)
+        self.tts.on_error = self.logbook.line
         await asyncio.to_thread(self.tts.load)
         self.tts.start()
         self.status["tts"] = self.tts.backend
@@ -300,6 +301,10 @@ class Friday:
         # si fallo el modelo, el hotkey o el microfono.
         self.logbook = Logbook(self.bus, self.cfg.root / "logs" / "friday.log",
                                echo=bool(self.args.console or self.args.verbose))
+        # Lo que revienta DENTRO de un handler no puede volver por el bus sin
+        # arriesgar un bucle, asi que el bus escribe directo en la bitacora.
+        # Antes iba a `print`, y bajo `pythonw` eso no llega a ningun sitio.
+        self.bus.on_error = self.logbook.line
 
         # El trabajo que vuelve tarde necesita boca: sin esto, un encargo al
         # taller termina en la bitacora y en ningun sitio mas.

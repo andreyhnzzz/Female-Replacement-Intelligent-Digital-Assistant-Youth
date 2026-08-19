@@ -143,7 +143,7 @@ class CompanionApp:
 
         if view.status() == QQuickView.Error:
             for err in view.errors():
-                print(f"[qml] {err.toString()}")
+                self.bus.report(err.toString(), origen="qml")
             raise RuntimeError("El QML del acompañante no cargo.")
 
         size = QSize(int(self.cfg.get("desktop.width", 760)),
@@ -160,7 +160,7 @@ class CompanionApp:
         if kind != "none":
             ok, detail = backdrop.apply(int(view.winId()), kind)
             if not ok:
-                print(f"[desktop] sin desenfoque de fondo: {detail}")
+                self.bus.report(f"sin desenfoque de fondo: {detail}", origen="desktop")
 
         self.view = view
 
@@ -169,11 +169,12 @@ class CompanionApp:
 
         Si la geometria no se pudo importar se fuerza el plan B aqui, en
         Python, en vez de dejar que QML lo descubra fallando: asi el motivo
-        aparece en la consola una vez y no como un error de QML sin contexto.
+        aparece una vez en la bitacora y no como un error de QML sin contexto.
         """
         mode = str(self.cfg.get("desktop.core.mode", "quick3d"))
         if mode == "quick3d" and not GEOMETRY_OK:
-            print(f"[desktop] sin QtQuick3D, uso el nucleo 2.5D: {GEOMETRY_WHY}")
+            self.bus.report(f"sin QtQuick3D, uso el nucleo 2.5D: {GEOMETRY_WHY}",
+                            origen="desktop")
             mode = "projected"
         return {
             "mode": mode,

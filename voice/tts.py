@@ -47,6 +47,12 @@ class LocalTTS:
         self.info = ""
         self.speaking = False
         self.muted = False
+        # Donde contar lo que falla. `friday.py` lo apunta a la bitacora.
+        # Iba a `print`, y este modulo corre dentro del hilo `tts` de un
+        # proceso lanzado con `pythonw`: sin consola, `sys.stdout` es None y
+        # CPython se come el `print`. Justo el fallo mas dificil de
+        # diagnosticar —FRIDAY se queda muda— era el que no dejaba rastro.
+        self.on_error: Any = None
 
         self._piper: Any = None
         self._sapi: Any = None            # se crea DENTRO del worker
@@ -158,6 +164,15 @@ class LocalTTS:
         que el HUD muestre «hablando» durante la voz real y no un parpadeo."""
         return self._idle.wait(timeout=timeout)
 
+    def _fallo(self, texto: str) -> None:
+        """Un problema de voz, contado donde se pueda leer."""
+        if self.on_error is None:
+            return
+        try:
+            self.on_error(texto)
+        except Exception:
+            pass                          # no vamos a perder la voz por el log
+
     # ══════════════════════════════ el worker: dueño unico de la voz
     def _run(self) -> None:
         com = None
@@ -168,7 +183,7 @@ class LocalTTS:
                 com = pythoncom
                 self._sapi = self._build_sapi()
             except Exception as exc:
-                print(f"[tts] SAPI no arranco: {exc!r}")
+                self._fallo(f"[tts] SAPI no arranco: {exc!r}")
                 self.backend = "none"
             finally:
                 self._ready.set()
@@ -183,7 +198,7 @@ class LocalTTS:
                 try:
                     self._speak(item)
                 except Exception as exc:
-                    print(f"[tts] fallo: {exc!r}")
+                    self._fallo(f"[tts] fallo al hablar: {exc!r}")
                     self._recover()
                 finally:
                     self.speaking = False
@@ -226,7 +241,7 @@ class LocalTTS:
         try:
             self._sapi = self._build_sapi()
         except Exception as exc:
-            print(f"[tts] no pude recuperar la voz: {exc!r}")
+            self._fallo(f"[tts] no pude recuperar la voz: {exc!r}")
             self._sapi = None
 
     # ══════════════════════════════ sintesis
