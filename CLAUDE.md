@@ -401,6 +401,20 @@ probabilístico es lo que pasa cuando se equivoca:
 - **`pyttsx3` cachea el motor en un dict global del módulo** y su
   `runAndWait()` vuelve antes de que acabe el audio, así que cada frase corta
   a la anterior. Por eso se usa `comtypes` directo.
+- **Contar GPUs no es poder usarlas.** `_has_cuda()` preguntaba
+  `get_cuda_device_count() > 0` y veía la tarjeta, pero CTranslate2 carga
+  cuBLAS/cuDNN en la **primera transcripción**, no al construir el modelo.
+  Con el driver instalado y sin runtime CUDA 12, `load()` anunciaba
+  «oidos: small/cuda/float16», el PTT se armaba, y la voz moría justo al
+  hablar (`Library cublas64_12.dll is not found`). Verde al arrancar, sorda
+  al usarse — y sorda es el peor fallo posible en lo único que no tiene otra
+  entrada. `transcribe()` se rescata a CPU y lo cuenta por `on_error`.
+- **El runtime CUDA sale de los wheels `nvidia-*-cu12`, y se registra por
+  `PATH`.** Las DLL viven en `site-packages/nvidia/*/bin`, que Windows no
+  mira. `os.add_dll_directory` **no** sirve: CTranslate2 las carga desde C++
+  con `LoadLibrary` a secas, que ignora esos directorios. Va prepuesto a
+  `os.environ["PATH"]` en `stt.py::_registrar_dlls_cuda`. Medido con
+  `small`: 2615 ms en CPU → 1333 ms en GPU.
 - **El teclado repite `on_press` mientras la tecla sigue abajo.** En modo
   `toggle` eso abre y cierra el micrófono decenas de veces por pulsación. Hay
   que recordar el flanco (`_held`). La máquina de estados está separada del
