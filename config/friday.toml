@@ -411,6 +411,14 @@ max_chars        = 4000      # tope duro del hilo; recorta por lo mas viejo
 ttl_s            = 900       # sin hablar este rato, el hilo se corta solo
 speak_max_chars  = 700       # cuanto se dice en voz alta; el panel lleva todo
 
+# Atajo de latencia: si ninguna skill reconoce nada, no hay verbo de accion
+# y la frase es corta, se da por conversacion sin preguntarle al motor a
+# quien enrutarla. Ahorra una llamada entera por turno hablado — la mitad
+# del tiempo de respuesta con `claude_code`. Apagalo si prefieres que el
+# motor arbitre siempre, a cambio de esos segundos.
+fast_conversation  = true
+smalltalk_max_words = 12
+
 # ----------------------------------------------------------
 # PRIVACIDAD  —  candados duros
 # ----------------------------------------------------------

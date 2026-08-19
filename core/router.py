@@ -6,10 +6,14 @@ Cuatro caminos, del mas barato al mas caro:
   1. SEGUIMIENTO   la frase no se sostiene sola («y eso cuanto cuesta»):
                    es el turno anterior el que la explica.
   2. RAPIDO        regex de las skills. Sin latencia, sin motor. Cubre el 80%.
+  2b. CHARLA       nadie reconocio nada y no hay verbo de accion: es
+                   conversacion, y preguntarselo al motor cuesta un turno
+                   entero de latencia para confirmar lo evidente.
   3. PENSADO       el motor clasifica y, si no encaja en nada, responde libre.
 """
 from __future__ import annotations
 
+import asyncio
 import re
 import time
 from dataclasses import dataclass
@@ -32,14 +36,10 @@ CANCEL = re.compile(r"^\s*(no|cancela|cancelar|olv[ií]dalo|d[eé]jalo|"
                     r"detente|para|abortar?|mejor no|stop)\s*[.!]?\s*$", re.I)
 
 # ── seguimiento de conversacion ───────────────────────────────────
-# Frases que NO se sostienen solas: sin el turno anterior no significan
-# nada. Se reconocen por anafora («eso», «lo que dijiste») o por ser un
-# conectivo mas una pregunta pelada («y por que?»).
-#
-# Esto tiene que ganarle al enrutado rapido, no perder contra el: «y eso
-# cuanto cuesta» dispara el `\bcuanto\b` de `metricas` y acaba leyendo la
-# CPU. El disparador es corto y comun, y ahi el puntaje por especificidad
-# no puede ayudar — no es un fallo suyo, es que la frase habla de otra cosa.
+# Frases que no se sostienen solas, por anafora («eso») o por ser conectivo
+# mas pregunta pelada («y por que?»). Tiene que ganarle al enrutado rapido:
+# «y eso cuanto cuesta» dispara el `\bcuanto\b` de `metricas` y devuelve la
+# CPU. Contra un disparador corto y comun el puntaje no puede ayudar.
 FOLLOWUP = re.compile(
     r"(\b(eso|esa|ese|esos|esas|aquello|lo mismo|lo anterior|lo de antes|"
     r"lo que (dijiste|me dijiste|acabas de decir))\b"
@@ -51,8 +51,8 @@ FOLLOWUP = re.compile(
     r"cu[eé]ntame m[aá]s|sigue|contin[uú]a)\b"
     r"|^\s*no\s+(te\s+)?entend[ií]\b)", re.I)
 
-# Un verbo de accion cancela el seguimiento. «abre eso» lleva anafora pero
-# no es conversacion: es una orden, y las ordenes son de las skills.
+# Un verbo de accion cancela el seguimiento: «abre eso» lleva anafora pero
+# es una orden, y las ordenes son de las skills.
 ACTION = re.compile(
     r"\b(abre|abrir|lanza|ejecuta|inicia|arranca|cierra|enfoca|organiza|"
     r"mueve|renombra|borra|recuerda|apunta|anota|guarda|escribe|busca|"
@@ -94,6 +94,8 @@ class Router:
         self.last_result: SkillResult | None = None
         self.pending: PendingAction | None = None
         self.chat: Conversation = build_conversation(cfg)
+        self.fast_chat = bool(cfg.get("chat.fast_conversation", True))
+        self.smalltalk_words = int(cfg.get("chat.smalltalk_max_words", 12))
 
     # ── contexto ──────────────────────────────────────────────────
     def _ctx(self, text: str = "") -> SkillContext:
@@ -103,15 +105,23 @@ class Router:
 
     # ── seguimiento ───────────────────────────────────────────────
     def is_followup(self, text: str) -> bool:
-        """¿Esta frase continua el turno anterior en vez de empezar uno?
-
-        Hacen falta las tres cosas: que haya hilo vivo, que la frase lleve
-        anafora, y que NO sea una orden. La ultima condicion es la que
-        evita que «abre eso» se convierta en charla.
-        """
+        """¿Continua el turno anterior en vez de empezar uno? Hilo vivo,
+        anafora y ningun verbo de accion — las tres."""
         if not self.chat.active:
             return False
         return bool(FOLLOWUP.search(text)) and not ACTION.search(text)
+
+    def _is_smalltalk(self, text: str, scores: dict[str, float]) -> bool:
+        """¿Se puede dar por conversacion sin preguntarle al motor?
+
+        La condicion fuerte es que **ninguna** skill haya reconocido nada: el
+        paso pensado existe para rescatar frases que las regex no cubren, y
+        si algo puntuo, esa duda vale los cuatro segundos.
+        """
+        if not self.fast_chat or any(scores.values()):
+            return False
+        return (not ACTION.search(text)
+                and len(text.split()) <= self.smalltalk_words)
 
     # ── decidir ───────────────────────────────────────────────────
     async def decide(self, text: str) -> Route:
@@ -139,22 +149,26 @@ class Router:
         if best and scores[best] >= FAST_THRESHOLD:
             return Route(best, scores[best], "fast", scores)
 
+        # 2b. charla evidente: nadie reconocio nada, no hay verbo de accion y
+        # la frase es corta. Un turno de conversacion gastaba DOS llamadas al
+        # motor —clasificar y luego responder— y por `claude_code` cada una
+        # ronda los cuatro segundos. Esta es la que sobra.
+        if self._is_smalltalk(clean, scores):
+            return Route("none", 0.6, "chat-fast", scores)
+
         catalog = "\n".join(f"- {n}: {s.description}" for n, s in self.skills.items())
         prompt = (
             f"SKILLS:\n{catalog}\n"
             "- none: conversacion. Charla, opiniones, preguntas generales, "
             "desahogos, o cualquier cosa que no pida una accion concreta.\n\n"
-            # Un modelo pequeño casi nunca elige la ultima opcion de una
-            # lista de catorce, asi que «none» se nombra dos veces y con
-            # criterio propio. Sin esto, «que opinas de los lunes» acababa
-            # en `sistema` con confianza 0.8.
+            # «none» se nombra dos veces: un modelo pequeño casi nunca elige
+            # la ultima opcion de una lista de catorce.
             "Si el usuario no te esta PIDIENDO que hagas algo, es \"none\".\n"
             "Tambien es \"none\" si te pregunta por TI (quien eres, como "
             "estas, que sabes hacer) o si es una pregunta de conocimiento "
             "general que se contesta hablando.\n\n"
-            # Y la peticion al final, pegada a la respuesta: medido con un
-            # 8B, mover la frase del usuario del principio al final es lo
-            # que mas mueve el acierto de toda esta llamada.
+            # La peticion al final, pegada a la respuesta: con un 8B, es lo
+            # que mas mueve el acierto de esta llamada.
             f"PETICION DE VOZ:\n\"{clean}\"\n\n"
             "Enruta esa peticion a UNA skill de la lista.\n\n"
             'Responde SOLO: {"skill": "nombre", "confidence": 0.85, '
@@ -204,10 +218,9 @@ class Router:
         if res.ok and not route.skill.startswith("_"):
             self.last_result = res
 
-        # El hilo recoge TAMBIEN los turnos que atendio una skill: sin eso,
-        # «y eso cuanto pesa» despues de un briefing de noticias no tendria
-        # a que referirse. Se guarda lo hablado, no el markdown del panel:
-        # es lo que el usuario oyo y lo que hace de contexto.
+        # El hilo recoge tambien lo que atendio una skill, o «y eso cuanto
+        # pesa» tras un briefing no tendria a que referirse. Se guarda lo
+        # hablado, no el markdown: es lo que el usuario oyo.
         if not route.skill.startswith("_"):
             self.chat.add("user", text)
             self.chat.add("assistant", res.speak or res.error)
@@ -215,22 +228,27 @@ class Router:
         return route, res
 
     # ── conversacion libre ────────────────────────────────────────
+    def _recall(self, text: str) -> tuple[list, str]:
+        """Notas que vienen al caso, con su vecindad en el grafo.
+
+        Recorre y parsea el vault entero (no hay indice, regla 1), asi que va
+        en un hilo: hacerlo en el bucle de eventos congela el HUD y retrasa
+        cualquier evento del bus justo antes de la parte lenta del turno.
+        """
+        hits = self.vault.search(text, limit=3)
+        ctxt = self.graph.context_for([h.title for h in hits], depth=1,
+                                      max_chars=3500) if hits else ""
+        return hits, ctxt
+
     async def _freeform(self, text: str) -> SkillResult:
-        """Conversar. Lo que haria el motor por escrito, pero hablando.
+        """Conversar: prosa, sin contrato JSON.
 
-        Aqui **no hay contrato JSON**, a diferencia de las skills. Es
-        deliberado: pedirle a un modelo que converse dentro de un campo de
-        JSON le encoge las respuestas a una frase de tramite y, con un 8B
-        local, cada tanto rompe el formato y se pierde el turno entero. El
-        formato de una conversacion es prosa; el panel pinta esa misma
-        prosa como markdown y la voz dice lo que quepa.
-
-        La persona (`config/persona.md`) da el tono, nunca la estructura.
+        Pedir JSON aqui encoge las respuestas a una frase de tramite y con un
+        8B rompe el formato cada tanto. La persona da el tono, no la
+        estructura.
         """
         historia = self.chat.transcript(limit=int(self.cfg.get("chat.max_chars", 4000)))
-        hits = self.vault.search(text, limit=3)
-        ctxt = self.graph.context_for([h.title for h in hits], depth=1, max_chars=3500) \
-            if hits else ""
+        hits, ctxt = await asyncio.to_thread(self._recall, text)
 
         prompt = (
             (f"CONVERSACION HASTA AHORA:\n{historia}\n\n" if historia else "") +
@@ -256,12 +274,9 @@ class Router:
                                display=f"# Motor caido\n\n```\n{exc}\n```")
 
     def _for_voice(self, text: str) -> str:
-        """Recorta para hablar por frases enteras, nunca a media palabra.
-
-        Un corte duro a N caracteres deja a FRIDAY callandose a mitad de
-        una idea, que suena peor que una respuesta corta. El panel siempre
-        tiene el texto completo, asi que aqui no se pierde nada.
-        """
+        """Recorta por frases enteras, nunca a media palabra: cortarse a
+        mitad de una idea suena peor que una respuesta corta. El panel
+        siempre lleva el texto completo."""
         limit = int(self.cfg.get("chat.speak_max_chars", 700))
         plain = re.sub(r"\s+", " ", text).strip()
         if len(plain) <= limit:
