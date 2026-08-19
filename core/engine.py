@@ -625,14 +625,18 @@ class EngineSwitch(Engine):
 
     @property
     def current(self) -> Engine:
-        return self._engine_for(self.name)
+        return self._engine_for(self.name, self._spec)
 
-    def _engine_for(self, backend: str) -> Engine:
+    def _engine_for(self, backend: str, spec: ModelSpec | None = None) -> Engine:
         if backend not in ENGINES:
             raise ValueError(f"Backend desconocido: {backend}. Opciones: {list(ENGINES)}")
-        if backend not in self._cache:
-            self._cache[backend] = ENGINES[backend](self.cfg)
-        return self._cache[backend]
+        # La clave es el PROVEEDOR, no el backend: dos entradas `openai_compat`
+        # que apuntan a DeepSeek y a Qwen no pueden compartir adaptador, o la
+        # segunda hablaria con el endpoint de la primera.
+        clave = spec.provider_id if spec is not None else backend
+        if clave not in self._cache:
+            self._cache[clave] = ENGINES[backend](self.cfg, spec)
+        return self._cache[clave]
 
     # ── catalogo ──────────────────────────────────────────────────
     def find(self, spoken: str) -> ModelSpec | None:
@@ -666,7 +670,7 @@ class EngineSwitch(Engine):
         spec = spec or self.agentic_spec()
         if spec is None:
             raise RuntimeError("Ningun modelo del roster sabe trabajar en un repo.")
-        engine = self._engine_for(spec.backend)
+        engine = self._engine_for(spec.backend, spec)
         return await engine.complete(prompt, system=system, agentic=True,
                                      model=spec.model, **kw)
 
@@ -680,7 +684,7 @@ class EngineSwitch(Engine):
         if previous is not None and previous.key == spec.key:
             return True, f"ya estaba en {spec.label}"
         try:
-            self._engine_for(spec.backend)          # construir revela config rota
+            self._engine_for(spec.backend, spec)    # construir revela config rota
         except Exception as exc:
             return False, str(exc)[:160]
 
