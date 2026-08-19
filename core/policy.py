@@ -75,15 +75,23 @@ class Policy:
         }
 
         self.allow_agent = bool(cfg.get(f"{p}.allow_agent", True))
+        self.allow_memory_prune = bool(cfg.get(f"{p}.allow_memory_prune", True))
 
         root = Path(cfg.root) if hasattr(cfg, "root") else Path.cwd()
+        vr = cfg.get("vault.root", "vault") if hasattr(cfg, "get") else "vault"
+        self.vault_root = getattr(cfg, "vault_root", None) or (
+            Path(vr) if Path(vr).is_absolute() else root / vr)
+        try:
+            self.vault_root = Path(self.vault_root).resolve()
+        except OSError:
+            self.vault_root = Path(self.vault_root)
+
         self.write_roots = self._resolve_roots(
             cfg.get(f"{p}.write_roots", ["~/Documents", "~/Downloads", "~/Desktop"]), root)
         self.read_roots = self._resolve_roots(
             cfg.get(f"{p}.read_roots", ["~"]), root)
-        # Donde se le puede soltar un agente. Lista aparte y vacia por
-        # defecto: no hay «raiz razonable» que adivinar, y adivinar mal
-        # aqui significa dejar a un agente suelto en tu disco.
+        # Lista aparte y vacia por defecto: no hay raiz razonable que
+        # adivinar, y adivinar mal deja a un agente suelto en tu disco.
         self.agent_roots = self._resolve_roots(cfg.get(f"{p}.agent_roots", []), root)
 
     # ── raices ────────────────────────────────────────────────────
@@ -227,6 +235,39 @@ class Policy:
                             "va a modificar archivos del proyecto", "agent-write")
         return Decision(Verdict.ALLOW)
 
+    def can_prune(self, paths: list[Path]) -> Decision:
+        """Retirar notas del vault que ya quedaron resumidas en otra.
+
+        El unico permiso que **quita** algo, y por eso no se parece a
+        `can_write`: la frontera no es `write_roots` —el vault no esta ahi—
+        sino el vault, donde vive lo que escribio FRIDAY. Fuera estan los
+        archivos del usuario, y esos no los retira nadie por su cuenta.
+
+        Interruptor propio y no `allow_file_write`: mover un PDF y decidir
+        que dos semanas de diario sobran no son la misma decision.
+        """
+        if not self.enabled:
+            return Decision(Verdict.ALLOW, "politica desactivada")
+        if not self.allow_memory_prune:
+            return Decision(Verdict.DENY, "retirar notas esta deshabilitado",
+                            "policy.allow_memory_prune")
+        if not paths:
+            return Decision(Verdict.ALLOW, "nada que retirar")
+
+        for raw in paths:
+            p = Path(raw)
+            if p.suffix.lower() != ".md":
+                return Decision(Verdict.DENY, f"no es una nota: {p.name}",
+                                "hard-deny")
+            try:
+                rp = p.resolve()
+            except OSError:
+                return Decision(Verdict.DENY, f"ruta ilegible: {p.name}", "hard-deny")
+            if self.vault_root not in rp.parents:
+                return Decision(Verdict.DENY,
+                                f"fuera del vault: {p.name}", "vault-only")
+        return Decision(Verdict.ALLOW)
+
     def can_web(self, url: str) -> Decision:
         if not self.enabled:
             return Decision(Verdict.ALLOW, "politica desactivada")
@@ -308,6 +349,7 @@ class Policy:
             "web": self.allow_web,
             "web_fetch": self.allow_web_fetch,
             "agent": self.allow_agent,
+            "memory_prune": self.allow_memory_prune,
             "control": dict(self.control),
             "confirm_over": self.confirm_over,
             "write_roots": [str(r) for r in self.write_roots],
