@@ -353,12 +353,17 @@ class OpenAICompatEngine(Engine):
 
     name = "openai_compat"
 
-    def __init__(self, cfg: Config):
-        super().__init__(cfg)
+    def __init__(self, cfg: Config, spec: "ModelSpec | None" = None):
+        super().__init__(cfg, spec)
         p = "engine.openai_compat"
-        self.base = str(cfg.get(f"{p}.base_url", "http://127.0.0.1:8080/v1")).rstrip("/")
-        self.model = cfg.get(f"{p}.model", "local-model")
-        self.key_env = str(cfg.get(f"{p}.api_key_env", "") or "")
+        # La entrada del roster manda sobre el bloque global: es lo que deja
+        # convivir DeepSeek, Qwen y un llama.cpp local en el mismo roster.
+        self.base = str((spec.base_url if spec and spec.base_url else None)
+                        or cfg.get(f"{p}.base_url", "http://127.0.0.1:8080/v1")).rstrip("/")
+        self.model = (spec.model if spec and spec.model else None) \
+            or cfg.get(f"{p}.model", "local-model")
+        self.key_env = str((spec.api_key_env if spec and spec.api_key_env else None)
+                           or cfg.get(f"{p}.api_key_env", "") or "")
         self._key_inline = str(cfg.get(f"{p}.api_key", "not-needed") or "")
 
     @property
