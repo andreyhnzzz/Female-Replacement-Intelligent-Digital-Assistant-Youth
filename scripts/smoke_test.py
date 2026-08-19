@@ -404,6 +404,43 @@ async def main() -> int:
     check("wiki y outputs no se tocan",
           vault.exists("wiki/Proyecto Alfa.md") and vault.stats()["wiki"] >= 3)
 
+    # ── una diaria que cambia mientras el motor resume no se retira ──
+    # `plan` corre fuera del candado del turno y `commit` dentro: entre los
+    # dos hay una llamada al motor que puede tardar minutos, y ahi el usuario
+    # puede escribir. Retirar lo que cambio despues de leerlo seria tirar
+    # justo lo que el resumen no vio.
+    for dia in ("2019-11-01", "2019-11-02", "2019-11-03"):
+        vault.write(vault.raw / f"{dia}.md", f"- nota: apunte de {dia}",
+                    meta={"type": "daily"})
+    con2 = Consolidator(vault, keep_days=7, min_notes=2,
+                        target="raw/Otro consolidado.md", trash_days=30)
+    p6 = con2.plan()
+    check("hay plan para el segundo consolidado", len(p6.sources) >= 3,
+          f"{len(p6.sources)} diarias")
+    check("el plan anoto la huella de cada fuente",
+          len(p6.huellas) == len(p6.sources))
+
+    tocada = p6.sources[0]
+    time.sleep(0.01)
+    tocada.write_text(tocada.read_text(encoding="utf-8") +
+                      "\n- nota: esto lo escribi mientras resumias\n",
+                      encoding="utf-8")
+    vault._cache.pop(tocada, None)
+    rep6 = con2.commit(p6, await con2.summarize(engine, p6), policy)
+    check("la nota que cambio NO se retira", tocada.exists(),
+          "sigue en su sitio")
+    check("y lo escrito despues sigue ahi",
+          "mientras resumias" in tocada.read_text(encoding="utf-8"))
+    check("las que no cambiaron si se retiran",
+          rep6.retired == len(p6.sources) - 1,
+          f"retiradas {rep6.retired} de {len(p6.sources)}")
+    check("y se dice por que se quedo una",
+          "cambiaron" in rep6.reason, rep6.reason)
+    # Esa diaria se queda a proposito, asi que se limpia aqui: si no, las
+    # pruebas de mas abajo la encuentran vieja y la cuentan como suya.
+    tocada.unlink()
+    vault._cache.pop(tocada, None)
+
     # Sin permiso no se retira, pero el resumen se escribe igual: perder el
     # resumen porque no se puede borrar seria cambiar una cosa por otra.
     diaria("2020-04-01", ["- `09:00` **voz** — el proveedor cambia en mayo"])

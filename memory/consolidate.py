@@ -84,6 +84,12 @@ class Plan:
     desde: str = ""
     hasta: str = ""
     bytes: int = 0
+    # (mtime, size) de cada fuente al planificar. `plan` corre FUERA del
+    # candado del turno y `commit` dentro: entre los dos pueden pasar
+    # minutos de llamada al motor, y en ese hueco el usuario puede escribir.
+    # Retirar una nota que cambio despues de leerla tiraria lo que el
+    # resumen no llego a ver.
+    huellas: dict[Path, tuple[float, int]] = field(default_factory=dict)
 
     def __bool__(self) -> bool:
         return bool(self.sources)
@@ -163,6 +169,11 @@ class Consolidator:
         for fecha, note in viejas:
             p.sources.append(note.path)
             p.bytes += note.size
+            try:
+                st = note.path.stat()
+                p.huellas[note.path] = (st.st_mtime, st.st_size)
+            except OSError:
+                pass
             for kind, text in self._apuntes(note.body):
                 if self._es_rutina(kind, text):
                     p.rutina += 1
@@ -226,13 +237,23 @@ class Consolidator:
             rep.reason = "sin politica: resumo pero no retiro"
             return rep
 
-        decision = policy.can_prune(p.sources)
+        # Solo se retira lo que sigue igual que cuando se leyo. Lo que
+        # cambio despues de planificar no esta en el resumen, asi que
+        # retirarlo seria perderlo (ver `Plan.huellas`).
+        intactas, movidas = self._sin_cambios(p)
+        if not intactas:
+            rep.reason = "las diarias cambiaron mientras resumia; no retiro nada"
+            return rep
+
+        decision = policy.can_prune(intactas)
         if not decision.allowed:
             rep.confirm = decision.reason if decision.needs_confirm else ""
             rep.reason = decision.reason
             return rep
 
-        rep.retired, rep.shrunk = self.retirar(p.sources)
+        rep.retired, rep.shrunk = self.retirar(intactas)
+        if movidas:
+            rep.reason = f"{movidas} nota(s) cambiaron mientras resumia; esas se quedan"
         _, rep.freed = self.vault.purge_trash(self.trash_days)
         return rep
 
@@ -245,6 +266,30 @@ class Consolidator:
             _, freed = self.vault.purge_trash(self.trash_days)
             return Report(reason="no hay diarias que consolidar", freed=freed)
         return self.commit(p, await self.summarize(engine, p), policy)
+
+    def _sin_cambios(self, p: Plan) -> tuple[list[Path], int]:
+        """Las fuentes que siguen tal cual estaban al planificar.
+
+        Devuelve (intactas, cuantas cambiaron). Una nota sin huella no se
+        retira: si no se pudo medir al leerla, no hay con que comparar.
+        """
+        intactas: list[Path] = []
+        movidas = 0
+        for src in p.sources:
+            huella = p.huellas.get(src)
+            if huella is None:
+                movidas += 1
+                continue
+            try:
+                st = src.stat()
+            except OSError:
+                movidas += 1
+                continue
+            if (st.st_mtime, st.st_size) == huella:
+                intactas.append(src)
+            else:
+                movidas += 1
+        return intactas, movidas
 
     def retirar(self, sources: list[Path]) -> tuple[int, int]:
         """Manda los originales a la papelera. Devuelve (notas, bytes)."""
