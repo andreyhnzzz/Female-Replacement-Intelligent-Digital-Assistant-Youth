@@ -140,6 +140,12 @@ class Vault:
         self.wiki = self.root / wiki
         self.outputs = self.root / outputs
         self.daily_format = daily_format
+        # Cache de notas parseadas, con (mtime, size) como clave de validez.
+        # Sin indice (regla 1), cada busqueda abre y parsea el vault entero, y
+        # un turno hablado hace varias pasadas: `search`, `stats`, el grafo.
+        # Esto no persiste nada — se reconstruye leyendo archivos, que es
+        # justo lo que la regla pide.
+        self._cache: dict[Path, tuple[float, int, Note]] = {}
         for d in (self.raw, self.wiki, self.outputs):
             d.mkdir(parents=True, exist_ok=True)
 
@@ -151,9 +157,17 @@ class Vault:
 
     def read(self, path: Path | str) -> Note:
         p = self._resolve(path)
-        text = p.read_text(encoding="utf-8", errors="replace")
-        meta, body = parse_frontmatter(text)
         st = p.stat()
+        hit = self._cache.get(p)
+        if hit is not None and hit[0] == st.st_mtime and hit[1] == st.st_size:
+            return hit[2]
+        note = self._parse(p, st)
+        self._cache[p] = (st.st_mtime, st.st_size, note)
+        return note
+
+    def _parse(self, p: Path, st: Any) -> Note:
+        meta, body = parse_frontmatter(
+            p.read_text(encoding="utf-8", errors="replace"))
         return Note(
             path=p,
             rel=p.relative_to(self.root).as_posix(),
@@ -179,6 +193,10 @@ class Vault:
         """mode: create (sobrescribe) | append | prepend"""
         p = self._resolve(path)
         p.parent.mkdir(parents=True, exist_ok=True)
+        # Invalidar antes de tocar el archivo, no despues: dos escrituras
+        # dentro del mismo tick del reloj pueden dar igual (mtime, size) y la
+        # relectura devolveria el contenido viejo.
+        self._cache.pop(p, None)
 
         if mode in ("append", "prepend") and p.exists():
             old = p.read_text(encoding="utf-8", errors="replace")
@@ -198,6 +216,7 @@ class Vault:
     def append_section(self, path: Path | str, heading: str, lines: list[str]) -> Note:
         """Anade lineas bajo un encabezado; lo crea si no existe."""
         p = self._resolve(path)
+        self._cache.pop(p, None)
         block = "\n".join(lines).rstrip()
         if p.exists():
             text = p.read_text(encoding="utf-8", errors="replace")
@@ -290,12 +309,16 @@ class Vault:
         return out[:limit]
 
     def all_notes(self) -> list[Note]:
-        out = []
+        out, vivos = [], set()
         for p in self.files():
             try:
                 out.append(self.read(p))
+                vivos.add(p.resolve())
             except OSError:
                 continue
+        # Barrido: el cache no puede crecer con notas que ya no existen.
+        for ido in set(self._cache) - vivos:
+            self._cache.pop(ido, None)
         return out
 
     def stats(self) -> dict[str, Any]:
