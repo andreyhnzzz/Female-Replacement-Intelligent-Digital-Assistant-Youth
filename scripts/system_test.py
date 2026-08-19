@@ -943,6 +943,22 @@ async def main() -> int:
     route = await router.decide("si")
     check("lo pendiente caduca", route.skill != "_confirm" and not marca["corrio"])
 
+    print("  ── el toml no otorga permisos ──")
+    from skills.taller import _tools_permitidas
+
+    sin_shell = Policy(FakeCfg(sandbox))
+    ok_tools, fuera = _tools_permitidas(["Read", "Grep", "Bash"], sin_shell)
+    check("una tarea de solo lectura no puede traer Bash por el toml",
+          "Bash" not in ok_tools and "Bash" in fuera,
+          "allow_shell esta en false: la lista se filtra, no se obedece")
+    check("y lo inofensivo se queda", ok_tools == ["Read", "Grep"])
+    check("retirar no es silencioso", bool(fuera), f"retiradas={fuera}")
+    con_shell = Policy(FakeCfg(sandbox, allow_shell=True))
+    ok2, fuera2 = _tools_permitidas(["Read", "Bash"], con_shell)
+    check("con allow_shell en true si pasa", "Bash" in ok2 and not fuera2)
+
+    # ══════════════════ EL BUS CUENTA LO QUE REVIENTA ══════════════════
+    print()
     shutil.rmtree(sandbox, ignore_errors=True)
     shutil.rmtree(vault.root, ignore_errors=True)
 

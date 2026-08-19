@@ -82,6 +82,35 @@ def _fold(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", s.lower()).strip()
 
 
+# Herramientas que no son «leer y escribir archivos»: ejecutan comandos o
+# salen a la red. Las listas vienen del toml, asi que sin este filtro meter
+# `Bash` en `read_tools` convertia una tarea de SOLO LECTURA —que corre sin
+# confirmar— en ejecucion arbitraria, con `policy.allow_shell` en false y sin
+# enterarse. La regla 6 no admite que una capacidad con efecto se declare por
+# configuracion y esquive al guardia.
+_TOOLS_CON_EFECTO = {
+    "Bash": "allow_shell", "BashOutput": "allow_shell", "KillShell": "allow_shell",
+    "Execute": "allow_shell", "Task": "allow_shell", "Agent": "allow_shell",
+    "WebFetch": "allow_web_fetch", "WebSearch": "allow_web_fetch",
+}
+
+
+def _tools_permitidas(tools: list[str], policy) -> tuple[list[str], list[str]]:
+    """Filtra la lista declarada en el toml contra la politica.
+
+    Devuelve (permitidas, retiradas). Retirar en silencio seria peor que no
+    filtrar: quien lo puso en el toml tiene que enterarse de por que no esta.
+    """
+    ok, fuera = [], []
+    for t in tools:
+        interruptor = _TOOLS_CON_EFECTO.get(t)
+        if interruptor and not getattr(policy, interruptor, False):
+            fuera.append(t)
+        else:
+            ok.append(t)
+    return ok, fuera
+
+
 class TallerSkill(Skill):
     name = "taller"
     description = ("Le encarga trabajo a un agente dentro de un proyecto: "
@@ -108,6 +137,9 @@ class TallerSkill(Skill):
         # Referencias vivas: sin esto el recolector se lleva una tarea a
         # medio correr.
         self._jobs: set[asyncio.Task] = set()
+        # Un encargo tarda minutos. Sin tope, tres frases seguidas levantan
+        # tres agentes a la vez sobre el mismo disco.
+        self.max_jobs = max(1, int(self.opts.get("max_jobs", 2)))
 
     # ══════════════════════════════════════════════ ejecucion
     async def run(self, ctx: SkillContext) -> SkillResult:
@@ -130,7 +162,10 @@ class TallerSkill(Skill):
                 display="# Sin motor agentico\n\nEl adaptador activo entra "
                         "texto y saca texto. Cambia a uno que trabaje en repos.")
 
-        proyectos = self._proyectos(policy)
+        # Recorre el disco: `iterdir` por nivel y un `exists` por cada marca
+        # de repo. En el bucle de eventos eso congela el HUD justo al
+        # empezar el turno, que es cuando mas se nota.
+        proyectos = await asyncio.to_thread(self._proyectos, policy)
         if not proyectos:
             return SkillResult(
                 ok=False, error="sin agent_roots",
@@ -157,6 +192,15 @@ class TallerSkill(Skill):
                 speak=f"¿Que hago en {nombre}?",
                 display=f"# {nombre}\n\n`{ruta}`\n\nDime que quieres que haga ahi.",
                 data={"project": nombre, "path": str(ruta)})
+
+        if len(self._jobs) >= self.max_jobs:
+            return SkillResult(
+                ok=False, error="taller ocupado",
+                speak=f"Ya tengo {len(self._jobs)} encargos en marcha. "
+                      f"Espera a que acabe alguno.",
+                display=f"# Taller ocupado\n\n{len(self._jobs)} encargos "
+                        f"corriendo (tope: {self.max_jobs}).",
+                data={"jobs": len(self._jobs), "max_jobs": self.max_jobs})
 
         escribe = self._escribe(tarea)
         decision = policy.can_delegate(ruta, writes=escribe)
@@ -194,6 +238,16 @@ class TallerSkill(Skill):
         return self._lanzar(ctx, nombre, ruta, tarea, False)
 
     # ══════════════════════════════════════════════ el encargo
+    def _tools(self, escribe: bool, policy) -> tuple[list[str], list[str]]:
+        """La caja de herramientas del encargo, ya filtrada por la politica.
+
+        Un unico sitio para las dos rutas —lo que se anuncia y lo que se
+        entrega al motor—, o el panel diria «Bash» mientras el agente corre
+        sin el, que es la clase de mentira que hace inutil un aviso.
+        """
+        return _tools_permitidas(
+            self.write_tools if escribe else self.read_tools, policy)
+
     def _lanzar(self, ctx: SkillContext, nombre: str, ruta: Path,
                 tarea: str, escribe: bool) -> SkillResult:
         """Arranca el trabajo y devuelve el turno. Lo que sale de aqui es un
@@ -203,16 +257,20 @@ class TallerSkill(Skill):
         self._jobs.add(job)
         job.add_done_callback(self._jobs.discard)
 
+        tools, retiradas = self._tools(escribe, ctx.policy)
+        nota = (f"\n\n> Retiradas por politica: `{', '.join(retiradas)}`"
+                if retiradas else "")
+
         return SkillResult(
             speak=f"Voy con ello, Jefe. {tarea.capitalize()}, en {nombre}. "
                   f"Te aviso cuando acabe.",
             display=(f"# En marcha\n\n**{nombre}** · `{ruta}`\n\n"
                      f"**Tarea:** {tarea}\n\n"
-                     f"**Herramientas:** "
-                     f"`{', '.join(self.write_tools if escribe else self.read_tools)}`\n\n"
+                     f"**Herramientas:** `{', '.join(tools)}`{nota}\n\n"
                      f"Corre en segundo plano. Te aviso al terminar."),
             data={"action": "delegate", "project": nombre, "path": str(ruta),
-                  "task": tarea, "writes": escribe, "async": True})
+                  "task": tarea, "writes": escribe, "async": True,
+                  "tools": tools, "tools_retiradas": retiradas})
 
     async def _trabajar(self, ctx: SkillContext, nombre: str, ruta: Path,
                         tarea: str, escribe: bool) -> None:
@@ -237,9 +295,9 @@ class TallerSkill(Skill):
 
         try:
             engine = ctx.engine
+            tools, _ = self._tools(escribe, ctx.policy)
             kw = dict(cwd=str(ruta), timeout=self.timeout_s,
-                      max_turns=self.max_turns,
-                      tools=self.write_tools if escribe else self.read_tools,
+                      max_turns=self.max_turns, tools=tools,
                       permission_mode="acceptEdits" if escribe else "default")
 
             if hasattr(engine, "complete_agentic"):
