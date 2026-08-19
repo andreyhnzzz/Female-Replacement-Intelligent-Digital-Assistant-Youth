@@ -35,9 +35,14 @@ class Engine(ABC):
     # sin preguntar «¿eres Claude?» (regla 3).
     agentic_capable = False
 
-    def __init__(self, cfg: Config):
+    def __init__(self, cfg: Config, spec: "ModelSpec | None" = None):
         self.cfg = cfg
         self.timeout = float(cfg.get("engine.timeout_s", 180))
+        # La entrada del roster que pidio este adaptador, si la hubo. Solo la
+        # miran los backends que pueden apuntar a varios proveedores.
+        # NO se llama `spec`: `EngineSwitch` ya expone esa property de solo
+        # lectura y asignarla aqui la romperia.
+        self.model_spec = spec
 
     @abstractmethod
     async def complete(self, prompt: str, system: str = "", **kw: Any) -> str:
@@ -117,8 +122,8 @@ class ClaudeCodeEngine(Engine):
     name = "claude_code"
     agentic_capable = True
 
-    def __init__(self, cfg: Config):
-        super().__init__(cfg)
+    def __init__(self, cfg: Config, spec: "ModelSpec | None" = None):
+        super().__init__(cfg, spec)
         self.binary = cfg.get("engine.claude_code.binary", "claude")
         self.model = cfg.get("engine.claude_code.model", "claude-opus-5")
         self.perm = cfg.get("engine.claude_code.permission_mode", "acceptEdits")
@@ -229,8 +234,8 @@ class AnthropicAPIEngine(Engine):
     ENDPOINT = "/v1/messages"
     VERSION = "2023-06-01"
 
-    def __init__(self, cfg: Config):
-        super().__init__(cfg)
+    def __init__(self, cfg: Config, spec: "ModelSpec | None" = None):
+        super().__init__(cfg, spec)
         p = "engine.anthropic_api"
         self.base = str(cfg.get(f"{p}.base_url", "https://api.anthropic.com")).rstrip("/")
         self.model = cfg.get(f"{p}.model", "claude-opus-5")
@@ -299,8 +304,8 @@ class AnthropicAPIEngine(Engine):
 class OllamaEngine(Engine):
     name = "ollama"
 
-    def __init__(self, cfg: Config):
-        super().__init__(cfg)
+    def __init__(self, cfg: Config, spec: "ModelSpec | None" = None):
+        super().__init__(cfg, spec)
         self.host = cfg.get("engine.ollama.host", "http://127.0.0.1:11434").rstrip("/")
         self.model = cfg.get("engine.ollama.model", "llama3.1:8b")
 
