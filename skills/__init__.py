@@ -8,6 +8,7 @@ from .archivos import ArchivosSkill
 from core.bus import BUS
 
 from .base import PendingAction, Skill, SkillContext, SkillResult
+from .documentos import DocumentosSkill
 from .inbox import InboxSkill
 from .memoria import MemoriaSkill
 from .metricas import MetricasSkill
@@ -38,6 +39,7 @@ ALL_SKILLS: dict[str, type[Skill]] = {
     "pantalla": PantallaSkill,
     "ordenador": OrdenadorSkill,
     "taller": TallerSkill,
+    "documentos": DocumentosSkill,
     # el mundo de fuera
     "noticias": NoticiasSkill,
     "web": WebSkill,

@@ -356,7 +356,7 @@ volume    = 0.9
 [skills]
 enabled = ["metricas", "inbox", "plan", "vault", "agenda", "memoria",
            "sistema", "archivos", "pantalla", "ordenador", "taller",
-           "noticias", "web", "motor"]
+           "documentos", "noticias", "web", "motor"]
 
 [skills.metricas]
 sources         = ["vault/wiki", "vault/raw"]
@@ -404,6 +404,16 @@ max_turns   = 24             # tope de iteraciones del agente
 depth       = 2              # niveles de subcarpeta que se miran por raiz
 read_tools  = ["Read", "Glob", "Grep"]
 write_tools = ["Read", "Glob", "Grep", "Write", "Edit"]
+
+# Generar PDF y hojas de calculo hablando. El motor redacta, Python escribe
+# (regla 4), y el destino pasa por `policy.can_write`: si `write_to` no cae
+# bajo `[policy] write_roots`, FRIDAY lo dira en vez de escribir.
+#
+# `pdf` necesita la ventana abierta —Qt no puede maquetar sin interfaz— y
+# `xlsx` necesita openpyxl. Sin openpyxl escribe `.csv`, que Excel abre igual.
+[skills.documentos]
+write_to  = "~/Documents"
+max_filas = 200
 
 [skills.noticias]
 max_items = 12
