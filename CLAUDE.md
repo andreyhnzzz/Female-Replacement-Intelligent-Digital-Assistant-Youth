@@ -454,7 +454,23 @@ probabilístico es lo que pasa cuando se equivoca:
 .\.venv\Scripts\python scripts\system_test.py    # 160 · política, puertos, red, motor, taller, PTT
 .\.venv\Scripts\python friday.py --check         # dependencias, roster y capacidades
 .\.venv\Scripts\python scripts\ui_preview.py     # solo la interfaz, iteración rápida
+.\.venv\Scripts\python scripts\bench_modelos.py opus deepseek   # ¿cuánto entiende cada modelo?
 ```
+
+**El banco de modelos** (`scripts/bench_modelos.py`) puntúa la elección de
+acción del catálogo de `ordenador`, que es donde se nota si un modelo entiende
+lenguaje ambiguo. Dos cosas lo hacen medir algo, y las dos son fáciles de
+romper sin darse cuenta:
+
+- **Va por el `_decidir` real**, no por una copia del prompt. Un banco que
+  replica el prompt deja de medir el sistema en cuanto el prompt cambia, y no
+  avisa: sigue dando números buenos.
+- **Ninguna frase está en los ejemplos del catálogo.** «esto suena altísimo»
+  vive dentro del propio prompt; medir con ella mide memoria. Si añades casos,
+  que sean formas que el catálogo no haya visto.
+
+Medido: `opus` 12/12 · `haiku` 11/12. El fallo de Haiku es «necesito esto para
+pegarlo luego» y falla **hacia no actuar**, que es la dirección correcta.
 
 Las pruebas usan directorios temporales, motor simulado y feeds sintéticos: no
 tocan el vault real, no mueven archivos del usuario, no gastan llamadas y **no
