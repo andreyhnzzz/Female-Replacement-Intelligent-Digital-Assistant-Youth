@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 
 # ══════════════════════════════════════════════ modelos de datos
@@ -319,6 +319,28 @@ class WebOpener(Protocol):
     def open_url(self, url: str) -> bool: ...
 
 
+@runtime_checkable
+class DocumentWriter(Protocol):
+    """Deja un documento en disco: PDF o una hoja de calculo.
+
+    **Solo escribe.** Leer o modificar un PDF ajeno es otro permiso y sera
+    otro puerto: aqui se crea a partir de contenido que ya trae FRIDAY, y eso
+    no necesita abrir nada del usuario.
+
+    Quien redacta es el motor (devuelve markdown o filas); quien escribe el
+    archivo es Python (regla 4). El puerto no le pregunta nada al motor.
+
+    `formats()` dice que sabe hacer AHORA mismo — `xlsx` depende de que
+    openpyxl este instalado, y la skill tiene que poder decirlo antes de
+    prometerselo al usuario.
+    """
+
+    def formats(self) -> tuple[str, ...]: ...
+    def write_pdf(self, path: "Path", titulo: str, markdown: str) -> bool: ...
+    def write_sheet(self, path: "Path", cabeceras: list[str],
+                    filas: list[list[Any]]) -> "Path": ...
+
+
 # ══════════════════════════════════════════════ agregador
 @dataclass(slots=True)
 class SystemAccess:
@@ -341,6 +363,7 @@ class SystemAccess:
     media: MediaControl | None = None
     session: SessionControl | None = None
     clipboard: Clipboard | None = None
+    documents: DocumentWriter | None = None
 
     def available(self) -> dict[str, bool]:
         return {f: getattr(self, f) is not None for f in self.__slots__}
