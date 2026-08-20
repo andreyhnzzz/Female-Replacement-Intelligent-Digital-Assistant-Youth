@@ -392,6 +392,24 @@ probabilístico es lo que pasa cuando se equivoca:
 - **No raspes páginas de resultados de buscadores.** Cambian el HTML cada pocas
   semanas y muchos lo bloquean. Para temas se usa una API estable.
 
+### Documentos
+- **Qt aborta el proceso si maquetas sin `QGuiApplication`.** `QTextDocument`
+  y `QPdfWriter` no lanzan excepción: matan a FRIDAY en seco, exit 127, sin
+  traza y sin línea en la bitácora. Y `friday.py --console` / `--say` no crean
+  aplicación Qt (`run_console` es otro camino que `CompanionApp`), así que
+  pedir un PDF desde consola era matar al programa. Va el guardia
+  `documents._hay_qt()`, y `formats()` deja de anunciar `pdf` cuando no lo
+  hay: prometer menos es mejor que abortar.
+- **Una skill que se llama como una palabra corriente necesita `matches()`
+  propio** — y `documentos` sale en «busca en mis documentos» y «abre la
+  carpeta Documentos». Manda el par **verbo de crear + formato**, y los verbos
+  de abrir o buscar devuelven 0. Ojo con vetar por `lista`: es sustantivo más
+  veces que verbo («expórtame la lista a xlsx»), y un veto ancho se nota como
+  que la skill «no hace nada».
+- **`write_sheet` devuelve la ruta REAL, no un bool.** Sin openpyxl escribe
+  `.csv` al lado del `.xlsx` pedido, y la skill tiene que decir lo que hay en
+  disco, no lo que se pidió.
+
 ### Voz
 - **SAPI5 es COM con afinidad de apartamento.** Construirlo en un hilo y
   usarlo en otro no da error: cuelga `runAndWait()` para siempre y FRIDAY se
