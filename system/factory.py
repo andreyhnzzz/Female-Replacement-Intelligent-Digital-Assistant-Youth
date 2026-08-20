@@ -27,6 +27,11 @@ def build_system_access(cfg: Any, policy: Policy) -> SystemAccess:
     access.files = index
     access.organizer = LocalFileOrganizer(policy, index)
 
+    # Escribir PDF y hojas de calculo. El puerto existe siempre; que sepa
+    # hacer `pdf` o `xlsx` depende del entorno y lo dice `formats()`.
+    from system.documents import LocalDocumentWriter
+    access.documents = LocalDocumentWriter(policy)
+
     # El navegador se cablea despues de la parte especifica de plataforma,
     # porque quiere el puerto de predeterminados si existe. Ver el final.
 
