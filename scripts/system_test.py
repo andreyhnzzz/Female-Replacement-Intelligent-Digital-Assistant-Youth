@@ -1022,6 +1022,84 @@ async def main() -> int:
     check("y se exige lo que se pide", esq2["required"] == ["accion"])
     check("el enum sigue acotando", esq["properties"]["accion"]["enum"] == ["subir", "bajar"])
 
+    # ── documentos ────────────────────────────────────────────────
+    print("\n  ── documentos: generar sin pisar a nadie ──")
+    from skills.documentos import DocumentosSkill
+    from system.documents import LocalDocumentWriter
+
+    doc_skill = DocumentosSkill(FakeCfg(sandbox))
+    crear = ["hazme un pdf con el resumen", "pasa esto a excel",
+             "exportame la lista a xlsx", "genera una hoja de calculo"]
+    ajeno = ["abre el pdf del contrato", "busca mis pdf de facturas",
+             "listame los pdf que tengo", "abre la carpeta documentos",
+             "busca en mis documentos el informe", "pasa a la siguiente cancion",
+             "sube el volumen", "cuanta memoria ram me queda"]
+    check("reconoce lo suyo: crear + formato",
+          all(doc_skill.matches(f) > 0.9 for f in crear),
+          f"{[doc_skill.matches(f) for f in crear]}")
+    check("y no le roba a sistema, archivos ni ordenador",
+          all(doc_skill.matches(f) == 0.0 for f in ajeno),
+          "abrir o buscar un pdf no es fabricarlo")
+    check("sin formato reconocido no actua",
+          doc_skill.matches("hazme un resumen de esto") == 0.0)
+
+    escritor = LocalDocumentWriter()
+    # Este proceso no tiene QGuiApplication, asi que `pdf` NO puede ofrecerse.
+    check("formats() no promete pdf sin interfaz", "pdf" not in escritor.formats(),
+          f"{escritor.formats()}")
+    try:
+        escritor.write_pdf(sandbox / "x.pdf", "t", "cuerpo")
+        aborto = "no lanzo nada"
+    except RuntimeError as exc:
+        aborto = str(exc)[:40]
+    check("y pedirlo igualmente avisa en vez de matar el proceso",
+          aborto != "no lanzo nada", aborto)
+
+    hoja = escritor.write_sheet(sandbox / "tabla.xlsx", ["Mes", "Gasto"],
+                                [["Enero", 120], ["Febrero", 95]])
+    check("escribe la hoja", hoja.exists() and hoja.stat().st_size > 0, hoja.name)
+    check("y devuelve la ruta REAL, no la pedida", hoja.suffix in (".xlsx", ".csv"))
+
+    fuera = Path(tempfile.gettempdir()) / "no_deberia.pdf"
+    check("el destino pasa por politica",
+          not policy.can_write(fuera).allowed,
+          "fuera de write_roots no se escribe aunque lo pidas")
+
+    # ── varios proveedores en el mismo roster ──────────────────────
+    print("\n  ── un roster, varios proveedores ──")
+    from core.engine import EngineSwitch, load_roster
+
+    class CfgRoster(FakeCfg):
+        def get(self, clave, defecto=None):
+            if clave == "engine.roster":
+                return [
+                    {"key": "ds", "label": "DeepSeek", "backend": "openai_compat",
+                     "model": "deepseek-chat", "base_url": "https://api.deepseek.com/v1",
+                     "api_key_env": "DEEPSEEK_API_KEY", "say": ["deepseek"]},
+                    {"key": "qwen", "label": "Qwen", "backend": "openai_compat",
+                     "model": "qwen-plus", "base_url": "https://otro.example/v1",
+                     "api_key_env": "QWEN_API_KEY", "say": ["qwen"]},
+                ]
+            if clave == "engine.default_model":
+                return "ds"
+            return super().get(clave, defecto)
+
+    sw = EngineSwitch(CfgRoster(sandbox))
+    ds, qw = sw.find("deepseek"), sw.find("qwen")
+    check("el roster lee base_url por entrada", ds.base_url.endswith("deepseek.com/v1"))
+    check("y api_key_env por entrada", ds.api_key_env == "DEEPSEEK_API_KEY")
+    check("dos proveedores no comparten identidad", ds.provider_id != qw.provider_id)
+
+    e_ds = sw._engine_for(ds.backend, ds)
+    e_qw = sw._engine_for(qw.backend, qw)
+    check("ni comparten adaptador", e_ds is not e_qw,
+          "cachear por backend hacia que el segundo hablara con el endpoint del primero")
+    check("cada adaptador apunta a lo suyo",
+          e_ds.base.endswith("deepseek.com/v1") and e_qw.base.endswith("otro.example/v1"),
+          f"{e_ds.base} | {e_qw.base}")
+    check("y lleva su modelo", e_ds.model == "deepseek-chat" and e_qw.model == "qwen-plus")
+    check("el mismo spec reusa adaptador", sw._engine_for(ds.backend, ds) is e_ds)
+
     shutil.rmtree(sandbox, ignore_errors=True)
     shutil.rmtree(vault.root, ignore_errors=True)
 
