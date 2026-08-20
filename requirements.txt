@@ -27,5 +27,9 @@ pyttsx3>=2.90             # SAPI5 de Windows, local, cero descargas
 piper-tts>=1.2.0          # voz neuronal local (mejor calidad)
 soundfile>=0.12           # solo si usas piper por CLI
 
+# --- documentos ---
+# El PDF no lleva dependencia: lo maqueta Qt (QPdfWriter), que ya esta arriba.
+openpyxl>=3.1             # .xlsx de verdad; sin el se escribe .csv
+
 # --- opcionales ---
 # pytesseract             # OCR de pantalla; requiere el binario tesseract
