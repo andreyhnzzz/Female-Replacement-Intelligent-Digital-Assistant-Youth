@@ -32,7 +32,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from PySide6.QtCore import Property, QObject, QTimer, QUrl, Qt, Signal, Slot
+from PySide6.QtCore import Property, QObject, Qt, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QColor
 from PySide6.QtQuick import QQuickView
 from PySide6.QtWidgets import QApplication
@@ -41,7 +41,7 @@ from core.config import load as load_config
 from desktop.sprites import PROVIDER_ID, SpriteProvider
 
 try:
-    from desktop import geometry as _geometry     # registra los tipos QML
+    from desktop import geometry as _geometry  # noqa: F401 — registra los tipos QML
     GEOMETRY_OK = True
 except Exception as _exc:                          # pragma: no cover
     GEOMETRY_OK = False

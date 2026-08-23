@@ -532,6 +532,7 @@ async def main() -> int:
     # ── candado de privacidad ────────────────────────────────
     import socket
     import threading
+
     from core import privacy
 
     privacy.install()
@@ -573,8 +574,7 @@ async def main() -> int:
     # ══════════════════ EL HABLA SE NORMALIZA ANTES DE DECIDIR ═════
     print()
     print("  -- lo que llega del STT no es lo que escribiria nadie --")
-    from core.lang import (es_narrativo, es_pregunta, limpia, numero,
-                           parecido, slug_words)
+    from core.lang import es_narrativo, es_pregunta, limpia, numero, slug_words
 
     check("un numero dictado con letras es un numero",
           numero("volumen al veinte") == 20 and numero("treinta y cinco") == 35,
@@ -599,6 +599,7 @@ async def main() -> int:
     print()
     print("  -- el reloj: puro, y no repite --")
     from datetime import datetime as _dt
+
     from core.scheduler import Job, Scheduler, parse_dias, parse_intervalo
 
     trabajos = [Job(name="briefing", do="dame el briefing", at=(8, 30),

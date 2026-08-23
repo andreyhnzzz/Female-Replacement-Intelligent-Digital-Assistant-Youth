@@ -1,0 +1,3 @@
+# Herramientas de desarrollo. No se instalan en la maquina del usuario final,
+# solo en quien toca el codigo.
+ruff==0.16.4

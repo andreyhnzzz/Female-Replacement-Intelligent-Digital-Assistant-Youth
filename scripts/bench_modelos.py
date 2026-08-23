@@ -33,10 +33,10 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from core import config as config_mod              # noqa: E402
-from core import http                              # noqa: E402
-from core.engine import build_engine               # noqa: E402
-from skills.ordenador import CATALOGO, OrdenadorSkill   # noqa: E402
+from core import config as config_mod  # noqa: E402
+from core import http  # noqa: E402
+from core.engine import build_engine  # noqa: E402
+from skills.ordenador import CATALOGO, OrdenadorSkill  # noqa: E402
 
 PASS, FAIL = "\033[92m ok \033[0m", "\033[91mFALLA\033[0m"
 

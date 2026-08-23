@@ -37,6 +37,50 @@ from system.ports import FileInfo, OpKind, SystemAccess
 PASS, FAIL = "\033[92m ok \033[0m", "\033[91mFALLA\033[0m"
 results: list[tuple[str, bool, str]] = []
 
+# Directorios de codigo propio a auditar estaticamente. No scripts/ (ahi
+# viven pruebas y utilidades de desarrollador, no lo que corre en la app) ni
+# .venv (dependencias de terceros).
+_PAQUETES_PROPIOS = ("core", "memory", "skills", "system", "voice", "desktop")
+
+
+def _subprocess_sin_no_window() -> list[str]:
+    """Llamadas a `subprocess.run/Popen/call/check_output` sin `creationflags`.
+
+    FRIDAY corre sin consola (`pythonw.exe`): un proceso hijo de consola sin
+    `CREATE_NO_WINDOW` le abre una ventana negra propia, parpadeando encima
+    del escritorio en cada turno hablado. Es una trampa ya conocida
+    (ver CLAUDE.md, "Todo proceso hijo va con NO_WINDOW") y sin este chequeo
+    vuelve a colarse cada vez que alguien agrega un `subprocess.*` nuevo sin
+    acordarse. Analisis estatico via `ast`, no una regex: una regex se
+    confunde con comentarios y strings que mencionen "subprocess".
+    """
+    import ast
+
+    objetados: list[str] = []
+    nombres = {"run", "Popen", "call", "check_output", "check_call"}
+    for paquete in _PAQUETES_PROPIOS:
+        base = ROOT / paquete
+        if not base.is_dir():
+            continue
+        for archivo in base.rglob("*.py"):
+            try:
+                arbol = ast.parse(archivo.read_text(encoding="utf-8"))
+            except (SyntaxError, UnicodeDecodeError):
+                continue
+            for nodo in ast.walk(arbol):
+                if not isinstance(nodo, ast.Call):
+                    continue
+                fn = nodo.func
+                es_subprocess = (
+                    isinstance(fn, ast.Attribute) and fn.attr in nombres
+                    and isinstance(fn.value, ast.Name) and fn.value.id == "subprocess")
+                if not es_subprocess:
+                    continue
+                tiene_flag = any(kw.arg == "creationflags" for kw in nodo.keywords)
+                if not tiene_flag:
+                    objetados.append(f"{archivo.relative_to(ROOT)}:{nodo.lineno}")
+    return objetados
+
 
 def check(name: str, cond: bool, note: str = "") -> None:
     results.append((name, bool(cond), note))
@@ -96,8 +140,13 @@ def pruebas_windows(sandbox: Path) -> None:
     print("\n  ── catalogo de aplicaciones ──")
     from system.ports import AppInfo, DefaultApp
     from system.web import BrowserWebOpener
-    from system.win32.apps import (_STEAM_NOISE, WindowsAppCatalog,
-                                   _merge_aliases, _score, steam_libraries)
+    from system.win32.apps import (
+        _STEAM_NOISE,
+        WindowsAppCatalog,
+        _merge_aliases,
+        _score,
+        steam_libraries,
+    )
     from system.win32.defaults import _exe_from_command, _pretty
 
     check("un alias del toml admite texto suelto o lista",
@@ -204,6 +253,22 @@ async def main() -> int:
     check("bloquea app en lista negra",
           not policy.can_launch("regedit.exe").allowed)
     check("permite app normal", policy.can_launch("notepad.exe").allowed)
+
+    # Si el toml no declara `blocked_apps`, el piso por defecto sigue
+    # cubriendo los binarios de Windows que dan shell o tocan el sistema
+    # ("living-off-the-land"): no es solo regedit/cmd, la lista quedaba
+    # corta contra pwsh, wt, mshta, rundll32...
+    from core.policy import Policy as _PolicyDefault
+    cfg_sin_blocklist = FakeCfg(sandbox)
+    del cfg_sin_blocklist._d["policy.blocked_apps"]
+    politica_default = _PolicyDefault(cfg_sin_blocklist)
+    check("sin blocked_apps propio, el piso por defecto sigue activo",
+          not politica_default.can_launch("mshta.exe").allowed
+          and not politica_default.can_launch("pwsh.exe").allowed
+          and not politica_default.can_launch("wt.exe").allowed,
+          "regedit y cmd no son la unica forma de dar shell")
+    check("el piso por defecto no bloquea apps normales",
+          politica_default.can_launch("notepad.exe").allowed)
     check("shell apagado por defecto",
           policy.can_shell("dir").verdict is Verdict.DENY)
 
@@ -380,8 +445,8 @@ async def main() -> int:
     # Se prueba el parseo, no la red: un feed real que cambie no puede
     # convertir esta suite en intermitente.
     print("\n  ── noticias ──")
-    from system.news import RssNewsReader, parse_feed
     from system.net import user_agent
+    from system.news import RssNewsReader, parse_feed
     from system.ports import NewsItem
 
     rss = """<?xml version="1.0"?><rss version="2.0"><channel>
@@ -552,7 +617,17 @@ async def main() -> int:
     async def _oye(ev):
         dichos.append(ev.data)
 
+    # Un `sleep` fijo para esperar la tarea de fondo es una carrera latente:
+    # con la maquina cargada 0.2s puede no bastar y el test falla sin que
+    # nada este roto de verdad. Se espera el evento real del bus
+    # (`agent.done`, que `_trabajar` emite justo antes de `core.say`).
+    hecho = asyncio.Event()
+
+    async def _hecho(ev):
+        hecho.set()
+
     BUS.on("core.say", _oye)
+    BUS.on("agent.done", _hecho)
     motor_t = MotorTrabajador(real_cfg0)
 
     res_lee = await taller.run(SkillContext(
@@ -564,7 +639,7 @@ async def main() -> int:
     check("contesta antes de terminar el trabajo",
           "voy con ello" in res_lee.speak.lower(), res_lee.speak[:40])
 
-    await asyncio.sleep(0.2)                 # dejar correr la tarea de fondo
+    await asyncio.wait_for(hecho.wait(), timeout=5)   # dejar correr la tarea de fondo
     check("el resultado vuelve por el bus cuando acaba",
           bool(dichos) and "fallan dos" in dichos[-1].get("text", ""),
           dichos[-1].get("text", "")[:60] if dichos else "no llego nada")
@@ -585,8 +660,9 @@ async def main() -> int:
           and "arregla" in res_esc.pending.describe,
           res_esc.pending.describe)
 
+    hecho.clear()
     res_esc.pending.run()
-    await asyncio.sleep(0.2)
+    await asyncio.wait_for(hecho.wait(), timeout=5)
     check("solo tras confirmar recibe herramientas de escritura",
           "Write" in motor_t.kw.get("tools", []), str(motor_t.kw.get("tools")))
 
@@ -725,7 +801,7 @@ async def main() -> int:
         """Puertos falsos: apuntan lo que se les pide, no tocan la maquina."""
         def __init__(self): self.log = []
         def volume(self, d): self.log.append(("volume", d)); return d
-        def set_volume(self, l): self.log.append(("set_volume", l)); return l
+        def set_volume(self, nivel): self.log.append(("set_volume", nivel)); return nivel
         def mute(self): self.log.append(("mute",)); return True
         def playback(self, a): self.log.append(("playback", a)); return True
         def read(self): self.log.append(("read",)); return "copiado"
@@ -1078,7 +1154,7 @@ async def main() -> int:
 
     # ── varios proveedores en el mismo roster ──────────────────────
     print("\n  ── un roster, varios proveedores ──")
-    from core.engine import EngineSwitch, load_roster
+    from core.engine import EngineSwitch
 
     class CfgRoster(FakeCfg):
         def get(self, clave, defecto=None):
@@ -1375,7 +1451,7 @@ async def main() -> int:
           "abrirlo seria ejecucion arbitraria esquivando allow_shell")
     check("y se dice por que", "No pude abrir" in res_exe.speak, res_exe.speak)
 
-    res_no = await _turno("busca el archivo zzzz y abrelo")
+    await _turno("busca el archivo zzzz y abrelo")
     check("sin resultado en la primera, no hay segunda",
           espia_cadena.abiertos == [],
           "abrir el resultado de una busqueda vacia es abrir cualquier cosa")
@@ -1404,6 +1480,12 @@ async def main() -> int:
 
     shutil.rmtree(sandbox, ignore_errors=True)
     shutil.rmtree(vault.root, ignore_errors=True)
+
+    # ══════════════════ ANALISIS ESTATICO ══════════════════
+    print("\n  ── nada de ventanas negras ──")
+    huerfanos = _subprocess_sin_no_window()
+    check("todo subprocess.* propio pasa creationflags=NO_WINDOW",
+          not huerfanos, ", ".join(huerfanos))
 
     bad = [n for n, ok, _ in results if not ok]
     print(f"\n  {len(results) - len(bad)}/{len(results)} pruebas pasaron")

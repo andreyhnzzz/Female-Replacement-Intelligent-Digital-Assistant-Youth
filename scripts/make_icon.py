@@ -60,7 +60,8 @@ def main() -> int:
     destino.parent.mkdir(parents=True, exist_ok=True)
 
     # QPainter necesita una aplicacion Qt viva aunque no se abra ventana.
-    app = QGuiApplication.instance() or QGuiApplication([])
+    # No se usa despues: existe solo para que el proceso no revienta.
+    _app = QGuiApplication.instance() or QGuiApplication([])
 
     # Qt no escribe .ico multi-tamaño, asi que se arma el contenedor a mano:
     # cabecera de 6 bytes, una entrada de 16 por tamaño, y los PNG detras.

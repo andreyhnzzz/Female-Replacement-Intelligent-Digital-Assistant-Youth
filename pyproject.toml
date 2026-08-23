@@ -1,0 +1,26 @@
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+# El vault es contenido del usuario (markdown), no codigo; `.venv` y los
+# artefactos de build no son codigo de este repo.
+extend-exclude = ["vault", ".venv", "build", "dist", "*.egg-info"]
+
+[tool.ruff.lint]
+# Un subconjunto deliberadamente chico: errores reales (E, F) e imports
+# desordenados (I). Nada de convenciones de estilo (docstrings, naming) —
+# este repo ya tiene las suyas, escritas en CLAUDE.md, y no coinciden con
+# las de PEP 8 en varios puntos (nombres en español, por ejemplo).
+select = ["E", "F", "I"]
+ignore = [
+    "E501",   # el limite de linea ya lo fija line-length; no duplicar el aviso
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Los scripts de prueba definen fixtures y clases falsas a proposito con
+# nombres que pisan los reales (F811 es ruido ahi, no un bug).
+"scripts/*_test.py" = ["F811"]
+# Los scripts standalone hacen `sys.path.insert(...)` antes de importar el
+# paquete del proyecto: es el patron correcto para un script fuera del
+# paquete, no un import mal colocado. Y las clases-espia de los tests son
+# deliberadamente compactas (una linea por metodo falso).
+"scripts/*.py" = ["E402", "E702"]

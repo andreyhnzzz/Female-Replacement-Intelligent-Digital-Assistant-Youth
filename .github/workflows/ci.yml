@@ -1,0 +1,39 @@
+name: CI
+
+# FRIDAY es una app de escritorio de Windows (pywin32, comtypes, QtQuick3D):
+# no tiene sentido correrla en un runner Linux, asi que este workflow vive
+# entero en windows-latest. Los dos scripts de prueba usan motor simulado,
+# directorios temporales y feeds sinteticos (ver CLAUDE.md, seccion
+# "Verificar cambios"): no tocan el vault real, no gastan llamadas de motor
+# y no dependen de la red, asi que corren igual en CI que en una maquina de
+# desarrollo.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Pruebas — memoria, consolidacion, skills, enrutado, reloj
+        run: python scripts/smoke_test.py
+
+      - name: Pruebas — politica, puertos, red, motor, taller, PTT, avisos
+        run: python scripts/system_test.py
