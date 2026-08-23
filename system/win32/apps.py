@@ -397,3 +397,32 @@ class WindowsAppLauncher:
             except OSError:
                 self.last_error = str(exc)[:160]
                 return False
+
+    def open_path(self, path: Path) -> bool:
+        """Abre un archivo o carpeta con lo que el usuario tenga asociado.
+
+        Pasa por `can_open`, no por `can_launch`: la ruta viene de haber
+        buscado en el disco, y una busqueda saca lo que haya. Ahi es donde
+        se bloquean los ejecutables — abrir un `.exe` que apareció en
+        Descargas seria ejecucion arbitraria dictada por voz.
+
+        `os.startfile` y no `Popen`: quien sabe que programa abre un `.xlsx`
+        es el shell, no nosotros, y ademas respeta lo que el usuario haya
+        elegido como predeterminado.
+        """
+        ruta = Path(path)
+        decision = self.policy.can_open(ruta)
+        if not decision.allowed:
+            self.last_error = decision.reason
+            return False
+        if not ruta.exists():
+            self.last_error = f"ya no esta ahi: {ruta.name}"
+            return False
+
+        self.last_error = ""
+        try:
+            os.startfile(str(ruta))  # noqa: S606
+            return True
+        except OSError as exc:
+            self.last_error = str(exc)[:160]
+            return False

@@ -50,6 +50,16 @@ _HARD_DENY = (
 # Extensiones que nunca se ejecutan ni se renombran en masa.
 _DANGEROUS_EXT = {".sys", ".dll", ".drv", ".efi", ".msi", ".scr", ".cpl"}
 
+# Lo que **corre codigo** al abrirlo. Ninguna de estas se abre por voz, ni
+# aunque la haya encontrado FRIDAY misma buscando en tu disco: es la lista
+# que separa «abre la factura» de ejecucion arbitraria. Ver `can_open`.
+# Incluye `.lnk` porque un acceso directo apunta a donde quiera.
+_EJECUTABLE = {
+    ".exe", ".com", ".scr", ".msi", ".bat", ".cmd", ".ps1", ".psm1",
+    ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh", ".hta", ".jar",
+    ".reg", ".lnk", ".pif", ".cpl", ".dll", ".sys", ".appref-ms",
+}
+
 
 # ── direcciones: lo que parece un host y a donde apunta de verdad ──
 def _hostname(url: str) -> str:
@@ -190,6 +200,39 @@ class Policy:
                 return Decision(Verdict.DENY, f"«{pat}» esta en la lista negra",
                                 "policy.blocked_apps")
         return Decision(Verdict.ALLOW)
+
+    def can_open(self, path: Path) -> Decision:
+        """Abrir un ARCHIVO con la aplicacion que le corresponda.
+
+        Permiso propio, y no `can_launch`, porque no es la misma decision.
+        `can_launch` recibe algo del **catalogo de aplicaciones**: una lista
+        curada de cosas instaladas. Esto recibe una ruta que salio de
+        **buscar en tu disco**, y una busqueda por voz saca lo que haya.
+
+        La diferencia importa por un caso concreto: «busca el instalador y
+        abrelo» encuentra un `.exe` en Descargas. Abrirlo es ejecucion
+        arbitraria, dictada, sobre un binario que puede haber llegado ahi de
+        cualquier forma — y esquivaria `allow_shell`, que esta en false
+        justo para que eso no pase. Un `.pdf` no ejecuta nada; un `.scr` si.
+
+        Por eso aqui la lista de extensiones es **negra y no negociable**: no
+        sale del toml, como `_HARD_DENY`. Es el suelo, no una preferencia.
+        """
+        if not self.enabled:
+            return Decision(Verdict.ALLOW, "politica desactivada")
+        if not self.allow_launch:
+            return Decision(Verdict.DENY, "abrir cosas esta deshabilitado",
+                            "policy.allow_launch")
+        if self._is_hard_denied(path):
+            return Decision(Verdict.DENY, "carpeta protegida del sistema", "hard-deny")
+
+        if path.suffix.lower() in _EJECUTABLE:
+            return Decision(Verdict.DENY,
+                            f"no abro ejecutables por voz ({path.suffix})",
+                            "hard-deny")
+        # Se abre lo que se puede leer: si una ruta esta fuera de tus raices,
+        # FRIDAY no tenia por que haber llegado a ella.
+        return self.can_read(path)
 
     def can_read(self, path: Path) -> Decision:
         if not self.enabled:

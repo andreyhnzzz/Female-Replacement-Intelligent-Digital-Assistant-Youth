@@ -268,9 +268,18 @@ class PageReaderPort(Protocol):
 # ══════════════════════════════════════════════ puertos de ESCRITURA
 @runtime_checkable
 class AppLauncher(Protocol):
-    """Lanza aplicaciones. Efecto sobre el sistema."""
+    """Lanza aplicaciones y abre archivos. Efecto sobre el sistema.
+
+    Los dos metodos parecen el mismo y no lo son: `launch` recibe algo del
+    catalogo —una lista curada de lo instalado— y `open_path` una ruta que
+    salio de buscar en el disco. Cada uno consulta su propio permiso
+    (`can_launch` y `can_open`), y por eso van declarados aparte en vez de
+    resolverse con un `if` dentro de uno solo.
+    """
 
     def launch(self, app: AppInfo, args: list[str] | None = None) -> bool: ...
+
+    def open_path(self, path: Path) -> bool: ...
 
 
 @runtime_checkable
