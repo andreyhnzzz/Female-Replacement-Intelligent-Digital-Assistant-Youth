@@ -110,6 +110,19 @@ def _wire_windows(cfg: Any, policy: Policy, access: SystemAccess) -> None:
     except ImportError:
         pass
 
+    # Radios y brillo van cada uno por su lado aunque compartan archivo: el
+    # brillo solo necesita pywin32, que ya esta; las radios necesitan las
+    # proyecciones WinRT, que son opcionales. Cablearlos juntos dejaria sin
+    # brillo a quien no tenga `winsdk`, que no tiene nada que ver.
+    try:
+        from system.win32.radios import (WindowsDisplayControl,
+                                         WindowsRadioControl, winrt_disponible)
+        access.display = WindowsDisplayControl(policy)
+        if winrt_disponible():
+            access.radios = WindowsRadioControl(policy)
+    except ImportError:
+        pass
+
     if reader is not None:
         try:
             from system.win32.screen import WindowsScreenReader

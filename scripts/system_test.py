@@ -844,12 +844,16 @@ async def main() -> int:
     check("una confianza baja DICHA si se respeta", espia.log == [],
           "ausente y baja son cosas distintas")
 
+    # Contra la tabla de despacho real, no contra una lista transcrita aqui:
+    # una prueba que hay que editar cada vez que añades una capacidad para
+    # que siga pasando no esta probando la invariante, la esta repitiendo.
+    manos = OrdenadorSkill(real_cfg0)._manos(None, {})
     check("toda accion del catalogo tiene implementacion",
-          all(a.nombre in {
-              "volumen_cambiar", "volumen_fijar", "silenciar", "reproduccion",
-              "copiar", "leer_portapapeles", "bloquear", "suspender", "minimizar"
-          } for a in CATALOGO),
-          f"{len(CATALOGO)} acciones declaradas")
+          not (set(a.nombre for a in CATALOGO) - set(manos)),
+          f"{len(CATALOGO)} declaradas, {len(manos)} cableadas")
+    check("y no hay implementaciones huerfanas",
+          not (set(manos) - set(a.nombre for a in CATALOGO)),
+          "una mano sin entrada en el catalogo es inalcanzable")
 
     # ══════════════════ SKILLS Y CONFIRMACION ══════════════════
     print("\n  ── skills de sistema ──")

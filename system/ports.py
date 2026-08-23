@@ -149,6 +149,22 @@ class PageText:
 
 
 @dataclass(frozen=True, slots=True)
+class RadioState:
+    """Estado de una radio del equipo. `unknown` no es `off`.
+
+    La distincion importa: si no sabemos si el Bluetooth esta encendido, la
+    respuesta honesta es «no puedo leerlo», no «esta apagado».
+    """
+    kind: str                        # bluetooth | wifi
+    on: bool | None = None           # None = no se pudo leer
+    name: str = ""
+
+    @property
+    def known(self) -> bool:
+        return self.on is not None
+
+
+@dataclass(frozen=True, slots=True)
 class Notice:
     """Un aviso que sale del equipo. Es red, y por eso lleva politica.
 
@@ -295,6 +311,37 @@ class MediaControl(Protocol):
 
 
 @runtime_checkable
+class RadioControl(Protocol):
+    """Enciende y apaga las radios del equipo: Bluetooth y wifi.
+
+    Puerto propio, y **no** un metodo de `MediaControl`, por el criterio de
+    siempre: el riesgo. Subir el volumen se deshace bajandolo; apagar el
+    wifi te deja sin red, y si FRIDAY vive de la red para el motor remoto,
+    se deja muda a si misma. Que la politica pueda conceder uno sin el otro
+    es justo el punto.
+
+    `state` se separa de `set` porque leer no tiene efecto: una skill que
+    solo quiere decirte si el Bluetooth esta encendido no necesita el
+    permiso que lo apaga.
+    """
+
+    def state(self, kind: str) -> RadioState: ...
+    def set(self, kind: str, on: bool) -> bool: ...
+
+
+@runtime_checkable
+class DisplayControl(Protocol):
+    """Brillo de la pantalla. 0-100, absoluto.
+
+    Aparte de las radios aunque las dos vivan en el mismo archivo: el brillo
+    no te desconecta de nada. Un puerto por consecuencia, no por proximidad.
+    """
+
+    def brightness(self) -> int: ...
+    def set_brightness(self, level: int) -> int: ...
+
+
+@runtime_checkable
 class SessionControl(Protocol):
     """Bloquear o suspender la sesion. Te deja fuera de la maquina.
 
@@ -400,6 +447,8 @@ class SystemAccess:
     session: SessionControl | None = None
     clipboard: Clipboard | None = None
     documents: DocumentWriter | None = None
+    radios: RadioControl | None = None
+    display: DisplayControl | None = None
     notify: NotifyPort | None = None
 
     def available(self) -> dict[str, bool]:
