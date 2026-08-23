@@ -174,6 +174,13 @@ def pruebas_windows(sandbox: Path) -> None:
           opener.last_error)
 
 
+def _con_texto(ctx, texto: str):
+    """El mismo contexto con otra frase. `SkillContext` es un dataclass, no
+    un objeto vivo: copiarlo es mas honesto que mutarlo entre pruebas."""
+    import dataclasses
+    return dataclasses.replace(ctx, text=texto)
+
+
 async def main() -> int:
     sandbox = Path(tempfile.mkdtemp(prefix="friday_sys_"))
     print(f"\n  F.R.I.D.A.Y — pruebas de sistema\n  sandbox: {sandbox}\n")
@@ -1104,6 +1111,85 @@ async def main() -> int:
     check("y lleva su modelo", e_ds.model == "deepseek-chat" and e_qw.model == "qwen-plus")
     check("el mismo spec reusa adaptador", sw._engine_for(ds.backend, ds) is e_ds)
 
+    # ══════════════════ RADIOS, BRILLO Y AVISOS ════════════════════
+    print()
+    print("  -- las radios no viven dentro de «media» --")
+    pol_radio = Policy(FakeCfg(sandbox, allow_media=True, allow_radio=True,
+                               allow_display=True, allow_notify=True))
+    check("encender una radio no se confirma",
+          pol_radio.can_control("radio").verdict is Verdict.ALLOW)
+    check("apagarla si",
+          pol_radio.can_control("radio", desconecta=True).verdict is Verdict.CONFIRM,
+          "apagar el wifi deja sin red a la propia FRIDAY")
+    pol_sin = Policy(FakeCfg(sandbox, allow_media=True))
+    check("tener volumen no da bluetooth",
+          pol_sin.can_control("media").verdict is Verdict.ALLOW
+          and pol_sin.can_control("radio").verdict is Verdict.DENY,
+          "el criterio de separacion es la consecuencia, no la comodidad")
+    check("el brillo no desconecta de nada, asi que va suelto",
+          pol_radio.can_control("display").verdict is Verdict.ALLOW)
+
+    from system.win32.radios import normaliza_radio
+    check("el STT parte los nombres compuestos y aun asi se reconocen",
+          normaliza_radio("el blue tooth") == "bluetooth"
+          and normaliza_radio("wi fi") == "wifi"
+          and normaliza_radio("WLAN") == "wifi")
+    check("una radio que no existe se queda desconocida",
+          normaliza_radio("la impresora") == "",
+          "tratarla como una cualquiera es apagar la que no era")
+
+    print()
+    print("  -- avisar fuera del equipo es su propio permiso --")
+    from system.notify import HttpNotifier, build_notifier
+    from system.ports import Notice
+
+    check("poder leer la red no es poder escribir en ella",
+          Policy(FakeCfg(sandbox, allow_web_fetch=True))
+          .can_notify("https://ntfy.sh/x").verdict is Verdict.DENY,
+          "la direccion del flujo es la diferencia")
+    check("y con permiso pero sin destino tampoco",
+          pol_radio.can_notify("").verdict is Verdict.DENY)
+    check("un destino en tu red local no recibe avisos",
+          pol_radio.can_notify("http://192.168.1.1/hook").verdict is Verdict.DENY,
+          "hereda el guardia de can_fetch")
+    check("un destino publico si",
+          pol_radio.can_notify("https://ntfy.sh/tema").verdict is Verdict.ALLOW)
+
+    avisador = HttpNotifier(pol_radio, kind="ntfy",
+                            target="https://ntfy.sh/tema")
+    _cuerpo, texto, cabeceras = avisador._payload(
+        Notice(title="Revisión de sprint", body="En 10 minutos",
+               urgencia="alta", tag="recordatorio"))
+    check("ntfy manda el titulo por cabecera y el aviso por cuerpo",
+          texto == "En 10 minutos" and bool(cabeceras.get("Title")),
+          str(cabeceras))
+    check("una cabecera con tildes no revienta el envio",
+          all(ord(c) < 256 for c in cabeceras["Title"]),
+          "las cabeceras HTTP van en latin-1")
+    tg = HttpNotifier(pol_radio, kind="telegram", token_env="NO_EXISTE_TOKEN",
+                      chat_id="42")
+    check("sin token en el entorno, telegram no esta configurado",
+          not tg.configurado and not tg.target)
+
+    # Lo que no puede filtrarse es el VALOR del token, no el nombre de la
+    # variable — ese es justo el dato que hay que enseñar cuando falta.
+    import os as _os
+    _os.environ["FRIDAY_TEST_TOKEN"] = "123456:secreto-que-no-sale"
+    try:
+        tg2 = HttpNotifier(pol_radio, kind="telegram",
+                           token_env="FRIDAY_TEST_TOKEN", chat_id="42")
+        check("con token, telegram queda listo", tg2.configurado)
+        check("y el panel nunca enseña el token",
+              "secreto-que-no-sale" not in tg2.describe(), tg2.describe())
+        check("pero la URL real si lo lleva, y es la que ve la politica",
+              "secreto-que-no-sale" in tg2.target,
+              "can_notify tiene que autorizar lo que de verdad se va a pedir")
+    finally:
+        _os.environ.pop("FRIDAY_TEST_TOKEN", None)
+    check("sin destino no hay puerto que ofrecer",
+          build_notifier(FakeCfg(sandbox), pol_radio) is None,
+          "una capacidad sin configurar no es una capacidad denegada")
+
     # ══════════════════ EQUIVOCARSE BARATO Y CARO NO ES IGUAL ══════
     print()
     print("  -- el enrutado es probabilistico; sus consecuencias no --")
@@ -1163,6 +1249,45 @@ async def main() -> int:
     router.pending = None
     check("un turno escrito nunca pasa por el eco", OIDO_DUDOSO < 1.0)
 
+
+    # ══════════════════ EL TALLER SE PUEDE MIRAR Y PARAR ═══════════
+    print()
+    print("  -- un encargo que dura minutos tiene que poder mirarse --")
+    from skills.taller import Encargo, TallerSkill
+
+    taller = skills["taller"]
+    ctx_taller = SkillContext(cfg=real_cfg, vault=vault, graph=graph,
+                              engine=FakeEngine(real_cfg), text="",
+                              system=access, policy=policy)
+
+    vacio = await taller.run(_con_texto(ctx_taller, "que encargos tienes"))
+    check("sin nada en marcha lo dice, no se inventa un proyecto",
+          "ningun encargo" in vacio.speak.lower(), vacio.speak)
+
+    taller._encargos["e99"] = Encargo(ident="e99", proyecto="mi-proyecto",
+                                      ruta=sandbox, tarea="revisar los tests",
+                                      escribe=False)
+    vivo = await taller.run(_con_texto(ctx_taller, "como va lo de mi-proyecto"))
+    check("con uno corriendo, contesta por el",
+          "mi-proyecto" in vivo.speak, vivo.speak)
+    parado = await taller.run(_con_texto(ctx_taller, "dejalo"))
+    check("y se puede parar sin confirmar",
+          parado.data.get("cancelado") == "e99", parado.speak)
+    check("cancelar no arma una confirmacion", parado.pending is None,
+          "pedir un «si» para dejar de hacer algo es al reves que el resto")
+    check("el encargo cancelado se recuerda un rato",
+          taller._encargos["e99"].estado == "cancelado",
+          "«como fue lo de X» tiene que poder contestarse despues")
+
+    sugerencias = TallerSkill._sugerir("metete en mi proyeto",
+                                       [("mi-proyecto", sandbox),
+                                        ("otra-cosa", sandbox)])
+    check("un nombre mal transcrito se OFRECE, no se elige",
+          sugerencias[:1] == ["mi-proyecto"], str(sugerencias))
+    check("y algo que no se parece a nada no se ofrece",
+          TallerSkill._sugerir("metete en la cocina",
+                               [("mi-proyecto", sandbox)]) == [],
+          "proponer basura es peor que decir que no lo reconoces")
 
     shutil.rmtree(sandbox, ignore_errors=True)
     shutil.rmtree(vault.root, ignore_errors=True)
