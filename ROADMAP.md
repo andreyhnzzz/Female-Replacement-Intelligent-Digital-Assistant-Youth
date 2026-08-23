@@ -9,98 +9,42 @@ Cuando algo se cierre, se borra de aquí y se documenta en el `README.md`.
 
 ## Prioridad alta
 
-### ☐ Controles de sistema: Bluetooth, wifi, brillo
+### ☐ Instalar la voz de Piper
 
-**De dónde sale:** sesión del 16/08/2026. Se le pidió dos veces *"desactivar
-el Bluetooth"* y contestó que no lo tenía claro. No es un fallo del
-planificador — esa capacidad no existe en el catálogo, y prefirió admitirlo
-antes que inventarse una acción parecida. Pero es una petición
-razonabilísima para un asistente de escritorio.
+`[voice.tts] engine = "piper"` está configurado, pero no hay ningún `.onnx` en
+`models/piper/`, así que siempre cae a SAPI5. Funciona, pero Piper suena
+bastante mejor. El código de carga y de reproducción ya está y es
+multiplataforma — **solo falta el modelo**, y bajarlo es una decisión del
+dueño de la máquina, no algo que el repo deba hacer por su cuenta.
 
-**Dónde va:**
-- Puerto nuevo `RadioControl` / `DisplayControl` en `system/ports.py`.
-- Implementación en `system/win32/desktop.py` (o un `radios.py` aparte si
-  crece).
-- Entradas nuevas en `CATALOGO` de `skills/ordenador.py` — recuerda que la
-  acción la elige el motor, así que basta con declararla bien.
-- Interruptor propio en `policy.can_control()`. **No lo metas dentro de
-  `media`**: apagar el wifi te deja sin red, subir el volumen no. El criterio
-  de separación es el riesgo, no la comodidad.
+Es lo único de esta lista que no es trabajo de programación, y por eso está
+arriba: es la mejora más grande por menos esfuerzo que le queda al proyecto.
 
-**Por dónde empezar:** Bluetooth y wifi por `Windows.Devices.Radios` (WinRT);
-brillo por WMI (`WmiMonitorBrightnessMethods`). Antes de añadir una
-dependencia, comprueba si `netsh`/PowerShell bastan — pero entonces pasa por
-`policy.can_shell()`, que está apagado por defecto y no es casualidad.
+### ☐ Medir `anthropic_api` de verdad
 
-### ☐ Decir qué no sabe hacer, en vez de "no me quedó claro"
+Sigue sin medirse, y es lo primero que hay que hacer antes de escribir una
+línea de adaptador persistente. Ya está implementado y en el roster
+(`di «directo»`); es HTTP puro, así que elimina de golpe el proceso de Node y
+la inicialización de Claude Code, y solo queda la latencia de red.
 
-**De dónde sale:** la misma sesión. Cuando el motor no encuentra acción en el
-catálogo, `skills/ordenador.py` responde *"No me quedó claro qué quieres que
-haga"*. Es engañoso: sí entendió la petición, lo que pasa es que **no tiene
-esa capacidad**. Son dos fallos distintos y el usuario merece saber cuál es.
+Necesita `ANTHROPIC_API_KEY`, que no está configurada.
 
-**Qué debería decir:** *"No sé desactivar el Bluetooth, Jefe. Eso todavía no
-lo tengo."* — nombrando lo que se le pidió.
+| | medido el 17/08/2026 |
+|---|---|
+| arrancar el binario `claude --version` | **0,2 s** |
+| turno corto completo por `claude_code` | **3,3-3,7 s** |
+| turno corto por Ollama local (HTTP) | **0,3-0,6 s** |
+| turno corto por `anthropic_api` | **sin medir** |
 
-**Dónde va:** `OrdenadorSkill._decidir()` ya recibe del motor un campo
-`porque`. Basta con distinguir dos casos en el JSON de respuesta: *no entendí*
-frente a *entendí pero no está en la lista*. Ojo con el contrato del prompt:
-tiene que seguir funcionando con un modelo local de 8B (regla 3 del
-`CLAUDE.md`).
+Lo importante: el arranque del proceso son 200 ms, no los 3 s. Mantener una
+instancia viva recupera bastante menos de lo que parece, y además choca con
+que cada llamada de FRIDAY declara su propio formato y es deliberadamente sin
+estado — una sesión persistente filtraría el contrato JSON de una skill al
+turno de la siguiente.
 
 ---
 
 ## Prioridad media
-
-### ☐ Enrutado: frases con vocabulario de sistema van a `metricas`
-
-**De dónde sale:** pruebas del 16/08/2026. *"Se me cayó el servidor de
-producción y tengo una demo en veinte minutos"* enruta a `metricas` en vez de
-a conversación libre. Es preexistente, no lo introdujo ningún cambio reciente.
-
-**Causa:** los disparadores de `metricas` son palabras sueltas de dominio
-técnico que aparecen de forma natural en frases que no piden métricas. El
-puntaje mide especificidad del disparador, pero un disparador corto y común
-sigue ganando cuando nadie más compite.
-
-**Dónde va:** `skills/metricas.py::triggers`. Fijar el caso en
-`scripts/smoke_test.py` junto a los otros pares que se pisan a propósito.
-
-**Ojo, no lo arregla el seguimiento de conversación.** Ese paso resuelve el
-caso hermano (*"y eso cuánto cuesta"* → `metricas`) porque la frase lleva
-anáfora y no se sostiene sola. Esta no: *"se me cayó el servidor"* es una
-frase entera y perfectamente autónoma que simplemente contiene una palabra
-del dominio de `metricas`. Sigue siendo un problema de disparadores.
-
-### ☐ Latencia de Claude: una instancia viva en vez de un proceso por turno
-
-**Medido el 17/08/2026 en la máquina de referencia:**
-
-| | |
-|---|---|
-| arrancar el binario `claude --version` | **0,2 s** |
-| turno corto completo por `claude_code` (Haiku o Sonnet) | **3,3-3,7 s** |
-| turno corto por Ollama local (HTTP, sin proceso) | **0,3-0,6 s** |
-
-Lo importante: **el arranque del proceso son 200 ms, no los 3 s**. El resto
-es la inicialización de Claude Code más la ida y vuelta a la API. Así que
-mantener una instancia viva recupera bastante menos de lo que parece.
-
-**Dos caminos, y el barato es el que no se ha probado:**
-
-1. **`anthropic_api`** — ya está implementado y en el roster (`di «directo»`).
-   Es HTTP puro: elimina el proceso y la inicialización de golpe, y solo
-   queda la latencia de red. Necesita `ANTHROPIC_API_KEY`, que hoy no está
-   configurada, así que **no se ha podido medir**. Es lo primero que hay que
-   probar antes de escribir nada.
-2. **Un adaptador de sesión persistente** — `claude` admite
-   `--input-format stream-json --output-format stream-json`, que deja un
-   proceso vivo atendiendo varios mensajes. El problema no es técnico sino
-   de diseño: cada llamada de FRIDAY declara su propio formato y es
-   deliberadamente **sin estado**, mientras que una sesión persistente
-   acumula contexto — el contrato JSON de una skill se filtraría al turno de
-   la siguiente. Haría falta reiniciar la sesión entre llamadas, que es
-   justo lo que se quería evitar.
 
 ### ☐ Modelo local: cerrar el hueco que queda
 
@@ -109,20 +53,44 @@ igual que Sonnet (ver el README). Lo que sigue abierto:
 
 - **Las skills de prosa no se han medido con el 8B**: `inbox`, `plan`,
   `noticias`, `pantalla` y `web` piden markdown, no JSON, y ahí el contrato
-  es más laxo pero la calidad de redacción es lo que más se nota. Falta una
-  pasada de las suyas.
+  es más laxo pero la calidad de redacción es lo que más se nota.
+- **El catálogo de `ordenador` creció a 14 acciones** (radios y brillo). La
+  medida de 12/12 se hizo con nueve. Hay que **repetirla**: más entradas es
+  más superficie donde confundir dos vecinas, y `radio_encender` /
+  `radio_apagar` son exactamente el par que un modelo pequeño puede cruzar.
+  Los ejemplos ya llevan el argumento (`desactiva el bluetooth -> bluetooth`),
+  que es lo que arregló el signo del volumen, pero no está comprobado.
 - **`_freeform` con notas del vault**: aun con las palabras vacías fuera, un
   8B se apoya más de la cuenta en el contexto inyectado. Convendría exigir
   una puntuación mínima, no solo que haya coincidencia.
 - **Modelos más pequeños que 8B** no se han probado. El 3B es donde se vería
   si los prompts aguantan de verdad o solo aguantan con este.
 
-### ☐ Instalar la voz de Piper
+### ☐ Calibrar `OIDO_DUDOSO` con voz real
 
-`[voice.tts] engine = "piper"` está configurado, pero no hay ningún `.onnx` en
-`models/piper/`, así que siempre cae a SAPI5. Funciona, pero Piper suena
-bastante mejor. El código de carga y de reproducción ya está y es
-multiplataforma — solo falta el modelo.
+El eco de confirmación (`core/router.py`) dispara por debajo de `0.55` de
+confianza del STT. Ese número está puesto **por criterio, no medido**: la
+lógica y el cableado están probados, pero cuál es el umbral correcto para
+`faster-whisper` con tu micrófono y tu voz solo se sabe dictando.
+
+Demasiado alto y FRIDAY pregunta constantemente, que es peor que no preguntar
+— confirmar de más entrena a decir «sí» sin escuchar. Demasiado bajo y no
+atrapa el caso que existe para atrapar.
+
+**Cómo**: `voice.stt.final` ya lleva `confidence` en el bus, y el registro lo
+recoge. Dictar un rato normal, mirar la distribución y poner el umbral en la
+cola baja.
+
+### ☐ Brillo de monitores externos (DDC/CI)
+
+`DisplayControl` funciona con paneles que exponen control por software:
+portátiles y todo-en-uno. Un monitor por HDMI no aparece en WMI y FRIDAY dice
+que no puede, que es correcto pero no útil si es tu única pantalla.
+
+Sale por DDC/CI, que es otro mundo: `SetVCPFeature` de `dxva2.dll`, por
+monitor físico. Cabe en `system/win32/radios.py` detrás del mismo puerto y sin
+tocar ninguna skill — que es justamente la prueba de que el puerto está bien
+puesto.
 
 ---
 
@@ -137,11 +105,18 @@ sabiendas y no por creer que se olvidaron.
 - **Nada de apagar ni reiniciar** en `SessionControl`. Una orden mal
   transcrita no puede costarte el trabajo sin guardar. Bloquear y suspender
   sí, y aun así se confirman.
+- **Los avisos solo salen, nunca entran.** Hay pasarela de notificación
+  (`system/notify.py`) y no la habrá de entrada: aceptar órdenes remotas
+  sortearía el PTT, la confirmación hablada y la política de un solo golpe.
+  Ver la regla 8 del `CLAUDE.md`.
+- **`allow_radio = false` de fábrica.** No es prudencia genérica: apagar el
+  wifi puede dejar sin motor a la propia FRIDAY a media frase.
 - **No se raspan páginas de resultados de buscadores.** Cambian el HTML cada
   pocas semanas y muchos lo bloquean; un asistente apoyado en eso empieza a
   mentir en cuanto se rompe.
 - **La memoria es markdown y nada más.** Ninguna base de datos, ningún índice
-  persistente.
+  persistente. Las marcas del reloj también: van a la nota diaria, no a un
+  archivo de estado.
 
 ---
 
@@ -149,10 +124,13 @@ sabiendas y no por creer que se olvidaron.
 
 - **`system/linux/`** — los `Protocol` de `system/ports.py` están para esto:
   implementarlos para X11/Wayland no debería tocar ni una skill. Es la prueba
-  de fuego de que la inversión de dependencias vale de algo.
+  de fuego de que la inversión de dependencias vale de algo. Con `RadioControl`
+  y `DisplayControl` recién añadidos hay dos candidatos fáciles: `rfkill` y
+  `brightnessctl` hacen lo mismo en tres líneas.
 - **Piper en streaming** — sintetizar por frases y empezar a hablar antes de
   tener el audio entero. Con respuestas largas se nota la espera, y ahora que
   FRIDAY conversa las respuestas son más largas que antes.
-- **Encargos al taller en paralelo** — hoy corren a la vez si los lanzas
-  seguidos, pero nada los enumera ni los cancela. Falta un *"¿cómo va lo de
-  mi-proyecto?"* y un *"déjalo"*.
+- **Trabajos del reloj declarados hablando** — hoy `[[schedule.jobs]]` se
+  escribe en el toml. «Todos los lunes a las nueve dame el briefing» debería
+  poder escribirlo ella. Es una skill que escribe config, así que necesita su
+  propio permiso: la política no cubre «modificarse a sí misma».

@@ -29,6 +29,8 @@ tu voz ─▶ F9 ─▶ STT local ─▶ Router ─▶ Skill ─┬─▶ vault/
                                     │         ├─▶ sistema      apps · ventanas · web
                                     │         ├─▶ archivos     buscar · ordenar · renombrar
                                     │         ├─▶ ordenador    volumen · medios · portapapeles
+                                    │         │                bluetooth · wifi · brillo
+                                    │         ├─▶ taller       encargos a un agente en tu repo
                                     │         ├─▶ noticias     RSS · resumen · briefing
                                     │         ├─▶ web          investigar · leer páginas
                                     │         ├─▶ pantalla     contexto de lo que ves
@@ -37,7 +39,20 @@ tu voz ─▶ F9 ─▶ STT local ─▶ Router ─▶ Skill ─┬─▶ vault/
                               Política ─── nada con efecto pasa sin permiso
                                     │
                          Acompañante (QtQuick3D) ─▶ TTS local
+
+        el reloj ─▶ recordatorios de tu agenda · briefings a su hora
+                 └─▶ (opcional) aviso al móvil cuando no estás delante
 ```
+
+Y no solo cuando le hablas: **el reloj** te avisa de lo que tienes en la
+agenda quince minutos antes y corre los trabajos que le declares. Un encargo
+al taller que tarda veinte minutos te encuentra donde estés, si configuras la
+salida de avisos.
+
+Una frase puede pedir dos cosas: **«busca el archivo del informe y ábrelo»**
+encuentra, elige y abre. La segunda mitad solo corre si sabe consumir lo que
+resolvió la primera — y con sus propios permisos, así que un `.exe` que
+apareció en Descargas no se abre por mucho que lo hayas encontrado tú.
 
 ### ✨ Por qué existe
 

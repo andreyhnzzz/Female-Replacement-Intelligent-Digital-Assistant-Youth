@@ -5,6 +5,148 @@ medidas en la máquina de referencia, no estimadas.
 
 ---
 
+## 2026-08-22 (tarde) — una frase puede pedir dos cosas
+
+«Busca este archivo y ábrelo» es de lo primero que le pide cualquiera, y
+terminaba con FRIDAY leyendo una lista de rutas: `archivos` busca, `sistema`
+abre, y el router elegía **una skill por turno**. Hacía las dos mitades y
+ninguna frase las juntaba. Las pruebas de sistema pasaron de 193 a 211.
+
+- **Traspaso tipado, no un planificador.** Una skill devuelve una `Entrega`
+  (`kind`, `valor`, `etiqueta`) y otra la consume si declara `acepta`. La
+  segunda **no reinterpreta la frase**: recibe el objeto resuelto o no corre.
+  «Ábrelo» suelto haría que `sistema` buscara una aplicación llamada «lo»,
+  que es la forma exacta del incidente del 17/08.
+- **Partir de más era el riesgo entero**, así que las reglas son estrechas:
+  conector explícito, verbo de acción en **las dos** mitades, y corte por el
+  último conector que cumpla. Eso salva «busca el informe y el contrato» (una
+  búsqueda de dos cosas) y «busca el de ventas y marketing y ábrelo» (el
+  primer «y» está dentro del nombre). Tope duro de dos mitades: encadenar tres
+  cosas sin ver nada intermedio es donde una frase mal oída deja de poder
+  repararse.
+- **La cadena se detiene ante una confirmación pendiente.** Encadenar por
+  encima de un «sí» que el usuario aún no ha dado es ejecutar lo no
+  autorizado. Y si la segunda mitad no puede correr, se hace la primera y **se
+  dice** — media tarea anunciada entera es peor que media tarea.
+- **`policy.can_open`**, permiso nuevo. `can_launch` recibe algo del catálogo
+  curado; esto recibe una ruta que salió de rastrear tu disco. «Busca el
+  instalador y ábrelo» encuentra un `.exe` en Descargas, y abrirlo sería
+  ejecución arbitraria dictada esquivando `allow_shell`. La lista de
+  extensiones ejecutables no sale del toml: es el suelo. Incluye `.lnk`.
+- **`AppLauncher.open_path`**: abrir un archivo con lo que el usuario tenga
+  asociado. Método aparte de `launch` porque consulta otro permiso.
+
+### El pronombre pegado (fallo preexistente)
+
+En español el pronombre se pega al imperativo y el verbo **lleva tilde**:
+«ábrelo». `\babre\b` no casa con ninguna de las dos formas — la frontera de
+palabra exige un no-alfanumérico detrás y ahí hay una «l». Estaba roto en tres
+sitios con tres síntomas distintos: «ábrelo» no contaba como orden en `ACTION`
+—así que `is_followup` lo tomaba por continuación de la charla y acababa en
+conversación—, no enrutaba a `sistema`, y no entraba en su rama de abrir. La
+forma más natural de pedirlo era la que menos funcionaba. Ahora es
+`core/lang.py::ENCLITICO`, una vez.
+
+---
+
+## 2026-08-22 — el reloj, las radios y oír mejor
+
+Tres frentes: FRIDAY deja de esperar a que le hablen, gana las capacidades
+que el ROADMAP pedía desde el 16/08, y se equivoca menos al recibir órdenes.
+Las pruebas pasaron de 267 a 323 (130 de humo + 193 de sistema).
+
+### Deja de esperar a que le hablen
+
+- **El reloj (`core/scheduler.py`).** Recordatorios que salen de la agenda del
+  vault y trabajos declarados en `[[schedule.jobs]]`. `due()` es **puro** —
+  recibe un instante y devuelve qué toca, sin tocar nada; los efectos viven en
+  `friday.py::_programador`. Misma división que `plan`/`commit` en la
+  consolidación y por la misma razón.
+- **Un trabajo dice una frase**, no llama a una skill. Entra por el router
+  como si la hubieras dicho tú, con su política y su confirmación: el reloj no
+  es una credencial. A cambio, cualquier capacidad nueva es programable el día
+  que existe, sin tocar el programador.
+- **La marca de «ya lo disparé» va a la nota diaria**, no a un archivo de
+  estado (regla 1). Reiniciar a media mañana no repite el recordatorio de las
+  nueve, y de paso queda escrito en el diario que te avisó.
+- **Un recordatorio habla por `core.say`, el mantenimiento por `core.info`.**
+  Es la regla del ama de llaves aplicada al revés a propósito: contarte que
+  ordenó sus archivos es interrumpir, avisarte de una reunión no.
+- **Puerta de salida (`system/notify.py`)**: ntfy, webhook o Telegram. Existe
+  por el caso que la voz no cubre — un encargo al taller tarda veinte minutos
+  y a esa hora puedes estar en otra habitación. **Solo sale, nunca entra**
+  (regla 8 nueva). `policy.can_notify` es propio y está apagado de fábrica:
+  esto manda datos tuyos a un tercero, que no es lo mismo que traerlos.
+
+### Las capacidades que faltaban
+
+- **Bluetooth, wifi y brillo.** Puertos `RadioControl` y `DisplayControl`,
+  cinco entradas nuevas en el catálogo de `ordenador`. Las radios por WinRT
+  (`winsdk`, opcional); el brillo por WMI, que ya venía con `pywin32`.
+  Cableados por separado a propósito: sin `winsdk` te quedabas también sin
+  brillo, que no tiene nada que ver.
+- **Ambas APIs tienen afinidad de hilo** y de formas distintas — WinRT quiere
+  un bucle de eventos que no puede ser el de FRIDAY, WMI quiere
+  `CoInitialize`. Un hilo único con tope de espera, la lección de
+  `voice/tts.py` aplicada antes de que costara una sesión.
+- **Encender una radio no se confirma; apagarla sí.**
+  `can_control(kind, desconecta=True)`. Apagar el wifi te deja sin red y puede
+  dejar muda a la propia FRIDAY si el motor es remoto. Confirmar también lo
+  inofensivo entrena a decir «sí» sin escuchar.
+- **«No te entendí» y «no sé hacerlo» dejan de ser la misma frase.** El caso
+  del 16/08: se pidió dos veces *«desactiva el Bluetooth»* y contestó «no me
+  quedó claro», habiéndolo entendido perfectamente. Ahora son tres respuestas
+  distintas, incluida *«sé hacerlo, pero en este equipo no puedo»*.
+- **El taller se puede mirar y parar.** Registro de encargos con estado:
+  «¿cómo va lo de mi-proyecto?» y «déjalo». Antes solo había un `set` de
+  tareas de asyncio, que bastaba para que el recolector no se las llevara y
+  para nada más.
+
+### Se equivoca menos al recibir órdenes
+
+- **`core/lang.py`**, con la normalización del habla que estaba duplicada en
+  tres sitios y resuelta distinto en cada uno. `numero()` entiende «volumen al
+  veinte» y «a la mitad»; antes `int("veinte")` lanzaba y se caía al valor por
+  defecto, poniendo el volumen al 50 cuando le habías pedido veinte.
+- **El riesgo entra en el enrutado.** Cada skill declara `riesgo`; el router
+  le exige más a las que tienen efecto. **Lo que separa una orden de un
+  accidente es el verbo, no el puntaje**: la primera versión subía el listón a
+  toda skill de efecto y dejaba «abre eso» fuera del camino rápido, que es
+  castigar justo el caso donde hay que ser instantánea.
+- **`_sospechoso`**, la defensa que sí cubre el incidente del 17/08: si el
+  motor manda a una skill con efecto una frase sin verbo cuyos disparadores
+  puntuaron cero, cae a conversación. Reproducido en las pruebas.
+- **El eco.** La confianza del STT viaja con el turno hasta el router, y por
+  debajo de `OIDO_DUDOSO` una orden **con efecto** se repite antes de
+  ejecutarla. Cubre el único fallo que ningún guardia posterior puede ver: la
+  política autoriza la acción correcta para una frase que nadie dijo. Solo con
+  efecto — confirmar de más es como se pierde la confirmación que importaba.
+- **`metricas` deja de acaparar vocabulario técnico.** *«Se me cayó el
+  servidor de producción y tengo una demo en veinte minutos»* devolvía el uso
+  de CPU. Ahora una palabra débil solo cuenta si la frase además pregunta.
+- **«Toda la mañana» ya no es una fecha.** `mañana` tiene dos significados y
+  el disparador de `agenda` se llevaba los dos.
+
+### Resiliencia
+
+- **`_supervisar()`** para las tareas de fondo. `asyncio.create_task` no
+  guarda referencia fuerte —el recolector puede llevarse un bucle a medio
+  correr— y sin `add_done_callback` la excepción que lo mató no la ve nadie.
+  Un bucle de fondo que muere en silencio parece que funciona.
+- **`net.post()` no sigue ni una redirección**, al revés que `fetch`: en un
+  POST el salto reenviaría el cuerpo a un destino que el usuario no escribió.
+- **La tabla de despacho de `ordenador` es un método** (`_manos`), no un dict
+  enterrado. La prueba que fija «toda acción declarada está cableada» llevaba
+  los nueve nombres transcritos a mano, así que declarar una capacidad rompía
+  la prueba hasta que la editabas — la forma de prueba que no prueba nada.
+  Ahora compara contra la tabla real, en las dos direcciones.
+- **`--check` deja de mentir.** «No en esta plataforma» era falso para las
+  radios (falta un `pip install`) y para los avisos (falta un destino en el
+  toml). Mandar a alguien a buscar un problema de Windows cuando le falta un
+  paquete es el mismo fallo que decir «no te entendí» cuando no sabes hacerlo.
+
+---
+
 ## 2026-08-18 (noche) — auditoría
 
 Repaso de calidad, seguridad y rendimiento sobre todo el repo. Lo que sigue

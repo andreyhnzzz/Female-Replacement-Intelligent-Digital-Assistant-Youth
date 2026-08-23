@@ -26,6 +26,13 @@ Python 3.12, asyncio + Qt/QML + QtQuick3D. Corre local. **No es una app web.**
    a internet**, tiene que pasar por ahí. Sin excepciones.
 7. **Las skills dependen de `system/ports.py`, nunca de `system/win32/`.**
    Si escribes `import win32gui` fuera de `system/win32/`, está mal.
+8. **Nada entra por la red.** FRIDAY sale (motor, noticias, páginas, avisos)
+   pero **no escucha**: no hay servidor, ni webhook entrante, ni pasarela de
+   mensajería que acepte órdenes. La única boca es el push-to-talk, delante
+   del equipo. Aceptar una orden remota sortearía de un golpe el PTT, la
+   confirmación hablada y la política —los tres guardias que existen porque
+   el STT se equivoca— y convertiría un token filtrado en control de la
+   máquina. `system/notify.py` solo manda.
 
 ## Cableado
 
@@ -46,8 +53,15 @@ voice/ptt.py --(hilo)--> voice/stt.py --> friday.py::handle
 ```
 
 `friday.py` es el único que conoce a todos. Es a propósito. También sostiene
-el **ama de llaves** (`_memory_keeper`), que consolida el diario viejo cada
-tantas horas bajo el mismo candado que un turno.
+las dos tareas de fondo: el **ama de llaves** (`_memory_keeper`), que
+consolida el diario viejo cada tantas horas, y el **reloj**
+(`_programador`), que es lo que FRIDAY hace sin que se lo pidas.
+
+Las dos van por `_supervisar()`, no por `asyncio.create_task` pelado: sin
+referencia fuerte el recolector puede llevarse un bucle a medio correr, y sin
+`add_done_callback` la excepción que lo mató se queda dentro de la tarea sin
+que la vea nadie. Un bucle de fondo que muere en silencio es peor que uno que
+no arranca, porque parece que funciona.
 
 El trabajo que tarda minutos vuelve por `core.say`, no por el turno: quien lo
 emita habla, aunque el turno que lo pidio se cerrara hace rato.
@@ -97,6 +111,60 @@ marca: es lo que mantiene viva la regla 3 en la unica skill que de verdad
 necesita un modelo concreto. `EngineSwitch.agentic_spec()` devuelve quien sabe
 hacerlo **sin conmutar** el modelo con el que estabas conversando.
 
+## El reloj: `core/scheduler.py`
+
+Hasta ahora FRIDAY solo hablaba cuando le hablabas. Sabía que tenías un quiz
+el martes y se lo callaba hasta que preguntaras. Lo que la convierte en
+acompañante y no en una consola con voz es que levante la vista a las nueve
+menos cuarto.
+
+**`Scheduler.due()` es puro**: recibe un instante y devuelve qué toca, sin
+tocar nada. Misma división que `plan`/`commit` en la consolidación y por la
+misma razón — lo que se puede probar sin reloj, sin red y sin efectos se
+prueba de verdad. Los efectos viven en `friday.py::_programador`.
+
+Cuatro invariantes:
+
+1. **Un recordatorio habla por `core.say`; el mantenimiento por `core.info`.**
+   Es la regla del ama de llaves aplicada al revés y a propósito: contarte
+   que ordenó sus archivos es interrumpir, avisarte de una reunión en diez
+   minutos es el trabajo. `_on_say` ya toma `_busy`, así que un aviso nunca
+   pisa un turno en curso: espera su vez.
+2. **La marca de «ya lo disparé» se escribe en la nota diaria**, no en un
+   archivo de estado (regla 1). Reiniciar a media mañana no repite el
+   recordatorio de las nueve, y de paso queda en el diario que te avisó, que
+   es lo que querrías leer al repasar el día. Se siembra al arrancar leyendo
+   la diaria.
+3. **Un trabajo dice una FRASE**, y esa frase entra por la puerta de siempre:
+   router, política, confirmación. El reloj no es una credencial — si acaba
+   en algo que espera un «sí», se queda esperándolo (regla 6). A cambio,
+   cualquier capacidad que exista es programable el día que existe, sin
+   tocar este archivo.
+4. **La marca se pone ANTES de actuar.** Un briefing con el motor lento tarda
+   más que un tick, y el siguiente lo encontraría vencido otra vez.
+
+La ventana tiene dos lados: `lead_min` antes y `gracia_min` después. Sin
+gracia, un equipo dormido durante el minuto exacto se come el aviso; con
+gracia larga, te enteras de la reunión cuando ya terminó.
+
+## La puerta de salida: `system/notify.py`
+
+El caso que la voz no cubre: un encargo al taller tarda veinte minutos y a
+esa hora puedes estar en otra habitación. Hablarle a una silla vacía no es
+avisar. Tres transportes (`ntfy`, `webhook`, `telegram`), un solo `send`.
+
+**`policy.can_notify` es propio y está apagado de fábrica.** No es
+`allow_web_fetch` al revés: descargar una página trae datos de fuera, esto
+manda datos **tuyos** —lo que FRIDAY te iba a decir, que sale de tu agenda y
+de tus proyectos— a un servicio de terceros. La dirección del flujo es la
+diferencia. Y hereda el guardia de `can_fetch`, así que un destino en tu red
+local tampoco recibe nada.
+
+`net.post()` **no sigue ni una redirección**, al revés que `fetch`: en un GET,
+seguir un salto autorizándolo antes es aceptable; en un POST el salto
+reenviaría el cuerpo a un destino que el usuario no escribió, y el cuerpo es
+justo lo que no quería publicar.
+
 ## La conversacion: `core/chat.py`
 
 Los ultimos turnos en RAM. **No es memoria** (regla 1): se pierde al cerrar, y
@@ -112,6 +180,136 @@ deja «abre eso» en `sistema`.
 skills. Pedir JSON para conversar encoge las respuestas a una frase de tramite
 y con un 8B rompe el formato cada tanto. La voz corta por frases enteras
 (`_for_voice`); el panel recibe todo.
+
+## Equivocarse menos: `core/lang.py` y el riesgo en el enrutado
+
+FRIDAY **no lee, oye**. El texto que llega al router no lo escribió nadie: lo
+transcribió un modelo que se come tildes, parte los nombres compuestos y
+escribe los números con letra la mitad de las veces. Cuatro defensas, y cada
+una cubre un fallo que las otras no pueden ver.
+
+### 1. `core/lang.py` — normalizar antes de decidir
+
+Estaba duplicado en tres sitios y resuelto distinto en cada uno: `engine`
+doblaba acentos, `taller` doblaba acentos *y* puntuación, y `ordenador` no
+doblaba nada y perdía «sube el volumen veinte» porque `int("veinte")` lanza.
+Ahora `fold`, `slug_words`, `numero`, `es_pregunta` y `limpia` viven juntos.
+
+`numero()` va en un orden que está pagado con un fallo: **dígitos, luego
+frases hechas, luego palabras sueltas.** «Bájale un poco» devolvía 1, porque
+el «un» de la frase hecha es también la palabra para el uno.
+
+### 2. Una palabra del dominio no es una petición del dominio
+
+`skills/metricas.py` sobrescribe `matches()`, como ya hacían `motor` y
+`memoria`. Sus disparadores débiles —`cpu`, `disco`, `cuánto`, `rendimiento`—
+son vocabulario técnico que aparece constantemente en frases que no piden
+nada. La regla es de **forma, no de peso**: una palabra débil solo cuenta si
+la frase además pregunta.
+
+```
+«cuánta RAM me queda»          pregunta  -> metricas
+«se me llenó el disco ayer»    narra     -> conversación
+«dame las métricas»            fuerte    -> metricas
+```
+
+Lo mismo con `agenda`: «mañana» tiene dos significados y solo uno es una
+fecha. Con artículo delante es un momento del día, y «llevo toda la mañana
+dándole vueltas» acababa contestando con el calendario.
+
+### 3. El riesgo decide cuánta confianza hace falta
+
+Cada skill declara `riesgo` (`inerte` | `efecto`). No es documentación: el
+router se lo exige. Equivocarse hacia una skill que lee cuesta una respuesta
+rara; hacia una que lanza, mueve o apaga cuesta que pase.
+
+**Lo que separa una orden de un accidente no es el puntaje, es el verbo.** La
+primera versión de esto subía el listón a toda skill de efecto y estaba mal:
+«abre eso» es una orden de tres palabras perfectamente clara y se quedaba
+fuera del camino rápido, costando un turno de motor. Castigar la brevedad es
+castigar justo el caso donde FRIDAY tiene que ser instantánea. El listón sube
+solo cuando la frase **no tiene verbo de acción ni nombra a la skill**.
+
+Y la defensa que sí cubre el incidente del 17/08/2026 (`_sospechoso`): si el
+**motor** manda a una skill con efecto una frase sin verbo de acción cuyos
+disparadores puntuaron **cero**, cae a conversación. La confianza que declara
+el modelo no sirve de guardia —es el modelo el que se está equivocando—; lo
+que sirve es que dos señales independientes no coincidan.
+
+Cuando dos skills empatan y alguna tiene efecto, `_preguntar_cual` pregunta
+en vez de elegir. Preguntar cuesta una frase.
+
+### 4. El eco: repetir lo dudoso antes de actuar
+
+El STT no falla de golpe, falla poco a poco y con seguridad aparente: lo
+transcrito se parece a lo dicho pero no es igual —«Desactual Bluetooth» por
+«desactiva el Bluetooth»— y el enrutado hace su trabajo sobre un texto que
+nunca se dijo. **Ninguno de los guardias de después puede verlo**: la política
+autoriza la acción correcta para la frase equivocada.
+
+Así que la confianza del STT (`avg_logprob`) viaja con el turno —
+`_on_utterance` → `handle(oido=)` → `dispatch(oido=)` — y por debajo de
+`OIDO_DUDOSO` una orden **con efecto** se repite y espera un «sí». Solo con
+efecto: confirmar de más entrena a decir «sí» sin escuchar, que es como se
+pierde la confirmación que sí importaba. Un turno escrito llega con 1.0 y no
+pasa por aquí nunca.
+
+## Una frase, dos capacidades: el encadenado
+
+«Busca este archivo y ábrelo» es probablemente la primera cosa que le pide
+cualquiera, y durante mucho tiempo terminaba con FRIDAY leyéndote una lista de
+rutas: `archivos` busca, `sistema` abre, y el router elegía **una sola skill
+por turno**. Hacía las dos mitades y ninguna frase las juntaba.
+
+El mecanismo es un **traspaso tipado**, no un planificador:
+
+1. `Router._partir()` corta la frase en dos por un conector explícito. Las dos
+   mitades tienen que llevar **verbo de acción** — eso es lo que salva «busca
+   el informe y el contrato», que es una búsqueda de dos cosas y no dos
+   peticiones. Se corta por el **último** conector que cumpla: en «busca el de
+   ventas y marketing y ábrelo», el primer «y» está dentro del nombre.
+2. La primera mitad se enruta y se ejecuta como siempre. Si resuelve algo,
+   devuelve una **`Entrega`** (`kind`, `valor`, `etiqueta`).
+3. La segunda mitad se enruta normal, y **solo corre si su skill declara
+   `acepta` ese `kind`**. Recibe el objeto ya resuelto en `ctx.slots`; no
+   reinterpreta la frase. «Ábrelo» a secas haría que `sistema` buscara una
+   aplicación llamada «lo», que es la forma exacta del incidente del 17/08.
+
+Cuatro frenos, cada uno tapa una forma distinta de hacer daño: si la primera
+falló no hay segunda; si la primera dejó una confirmación pendiente la cadena
+**se detiene ahí** (encadenar por encima de un «sí» pendiente es ejecutar lo
+no autorizado); si la segunda no acepta el tipo, no corre; y la segunda pasa
+por su propia política, porque pedirla en la misma frase no la convierte en
+parte de la primera. Cuando algo de eso falla, se hace la primera mitad y **se
+dice** que la segunda no — media tarea anunciada entera es peor que media
+tarea.
+
+**Tope duro de dos mitades**, y no es pereza: encadenar tres cosas sin que el
+usuario vea nada intermedio es justo donde una frase mal oída deja de poder
+repararse.
+
+### `policy.can_open` — abrir un archivo no es abrir una app
+
+`can_launch` recibe algo del **catálogo**: una lista curada de lo instalado.
+`can_open` recibe una ruta que salió de **rastrear tu disco**, y una búsqueda
+por voz saca lo que haya. El caso concreto: «busca el instalador y ábrelo»
+encuentra un `.exe` en Descargas, y abrirlo sería ejecución arbitraria
+dictada, esquivando `allow_shell` — que está en false justo para eso. La lista
+de extensiones ejecutables (`_EJECUTABLE`) **no sale del toml**: es el suelo,
+como `_HARD_DENY`. Incluye `.lnk`, que apunta a donde quiera.
+
+### El pronombre pegado: `core/lang.py::ENCLITICO`
+
+En español el pronombre se pega al imperativo, y con él **el verbo lleva
+tilde**: «ábrelo», «guárdalo», «ciérralas». `\babre\b` no casa con ninguna de
+las dos formas — la frontera de palabra exige un no-alfanumérico detrás y ahí
+hay una «l».
+
+Apareció en tres sitios a la vez con tres síntomas distintos: «ábrelo» no
+contaba como orden (`ACTION`), así que `is_followup` lo tomaba por
+continuación de la charla y acababa en conversación; no enrutaba a `sistema`;
+y no entraba en su rama de abrir. La forma más natural de pedirlo era la que
+menos funcionaba. Un rasgo del idioma se escribe una vez.
 
 ## La memoria se poda sola: `memory/consolidate.py`
 
@@ -176,6 +374,14 @@ optimizar Python, es **no hacer dos llamadas donde basta una**:
 - **Skill**: hereda `skills/base.py::Skill`. Define `name`, `description`,
   `triggers` (regex), `needs` (puertos requeridos) y `async run(ctx) -> SkillResult`.
   Registrar en `skills/__init__.py::ALL_SKILLS` y en `skills.enabled` del toml.
+  Dos campos más, y ninguno es decorativo: **`riesgo`** (`inerte` | `efecto`)
+  — el router le exige más confianza a lo que tiene consecuencias — y
+  **`acepta`**, los tipos de `Entrega` que sabe consumir cuando el turno viene
+  encadenado. Vacío significa que no participa como segunda mitad de una
+  frase, que es el valor correcto para casi todas.
+- **Encadenable**: una skill que resuelve algo devuelve
+  `SkillResult(entrega=Entrega(kind=..., valor=..., etiqueta=...))`. No sabe
+  quién lo recogerá (regla 5); el router pasa el testigo.
 - **Puerto nuevo**: `Protocol` en `system/ports.py`, campo en `SystemAccess`,
   implementación en `system/win32/` o `system/`, cableado en `system/factory.py`.
   **Separa lectura de escritura** — es interface segregation, no burocracia.
@@ -212,8 +418,34 @@ Spotify» sí significa siempre lo mismo, y resolverlo en 0 ms es una virtud.
 **El motor propone, no dispone.** Lo que devuelve se valida contra el catálogo
 (lista blanca — un `formatear_disco` alucinado no existe), contra el puerto
 disponible y contra `policy.can_control()`. Añadir una capacidad es una entrada
-en la tupla más su rama en `_aplicar`; hay una prueba que fija que no se pueda
-declarar una sin implementar.
+en la tupla más su rama en `_manos()`; hay una prueba que compara las claves de
+esa tabla contra `CATALOGO` en las dos direcciones, así que no se puede
+declarar una capacidad sin cablearla ni dejar una mano inalcanzable.
+
+**«No te entendí» y «no sé hacerlo» son dos fallos distintos** y durante un
+tiempo dieron la misma frase. Cuando se pidió dos veces *«desactiva el
+Bluetooth»*, FRIDAY contestó «no me quedó claro qué quieres que haga» — y sí
+lo había entendido; lo que faltaba era la capacidad. El que oye «no me quedó
+claro» lo repite más despacio; el que oye «no sé apagar el Bluetooth» sabe
+que puede dejar de intentarlo. `Propuesta.motivo` separa **tres** casos:
+
+- `no_entendi` — la frase no se entendió.
+- `fuera_de_catalogo` — se entendió y esa capacidad no existe. El prompt pide
+  un campo `pidio` justo para poder nombrarla.
+- `fuera_de_aqui` — existe pero no está cableada en esta máquina (sin
+  `winsdk` no hay radios). Decir «no sé hacerlo» ahí sería mentir.
+
+Por eso el `enum` del esquema lleva **todo** el catálogo y no solo lo
+disponible: si el modelo solo pudiera nombrar lo cableado, una petición de
+brillo en un equipo sin brillo saldría como «ninguna» y se contestaría «no te
+entendí». La lista blanca de **ejecución** sigue siendo lo disponible.
+
+Las radios y el brillo son puertos aparte (`RadioControl`, `DisplayControl`) y
+no métodos de `MediaControl`, por el criterio de siempre: el riesgo. Subir el
+volumen se deshace bajándolo; apagar el wifi te deja sin red y, si tu motor es
+remoto, deja muda a la propia FRIDAY. Y dentro de las radios, **encender no se
+confirma y apagar sí** — `can_control(kind, desconecta=True)`. Confirmar
+también lo inofensivo entrena a decir «sí» sin escuchar.
 
 ## El HUD
 
@@ -278,6 +510,23 @@ Dos cosas que no son opcionales ahí:
   `Bus.report` escribe en `_history` y en la bitacora, y no pasa por `emit`.
 - **Un `Future` de `run_coroutine_threadsafe` sin `add_done_callback` se traga
   la excepcion.** El hilo que la provoco ya siguio a lo suyo.
+
+### Dispositivos
+- **WinRT y WMI tienen afinidad de hilo, y no de la misma forma.** WinRT
+  (`Windows.Devices.Radios`) devuelve `IAsyncOperation` y necesita un bucle
+  de eventos que **no puede ser el de FRIDAY** —la llamada tarda cientos de
+  ms y el bucle está atendiendo el turno—; WMI por COM exige `CoInitialize`
+  en el hilo que lo usa. Los dos van al hilo único de
+  `system/win32/radios.py::DISPOSITIVOS`, con COM inicializado y tope de
+  espera. Es la misma lección de `voice/tts.py`, y cerrarlo en `shutdown` no
+  es opcional: un hilo con COM vivo retiene el proceso al salir.
+- **Un monitor externo no expone su brillo por WMI.** Eso va por DDC/CI, que
+  es otro mundo. `brightness()` devuelve **-1**, no 0: «no lo sé» y «apagado
+  del todo» no son lo mismo, y confundirlos hace que FRIDAY diga que tienes
+  la pantalla negra.
+- **Las cabeceras HTTP van en latin-1.** Un título de aviso con tildes
+  —«Revisión de sprint»— revienta el envío entero por la cabecera `Title` de
+  ntfy. Se codifica antes de mandarla.
 
 ### Motor y sistema
 - **Windows + npm shim**: pasar prompts largos por argv a `claude.CMD` los
@@ -468,8 +717,8 @@ probabilístico es lo que pasa cuando se equivoca:
 ## Verificar cambios
 
 ```powershell
-.\.venv\Scripts\python scripts\smoke_test.py     # 107 · memoria, consolidación, skills, enrutado
-.\.venv\Scripts\python scripts\system_test.py    # 160 · política, puertos, red, motor, taller, PTT
+.\.venv\Scripts\python scripts\smoke_test.py     # 130 · memoria, consolidación, skills, enrutado, reloj
+.\.venv\Scripts\python scripts\system_test.py    # 211 · política, puertos, red, motor, taller, PTT, avisos, cadena
 .\.venv\Scripts\python friday.py --check         # dependencias, roster y capacidades
 .\.venv\Scripts\python scripts\ui_preview.py     # solo la interfaz, iteración rápida
 .\.venv\Scripts\python scripts\bench_modelos.py opus deepseek   # ¿cuánto entiende cada modelo?

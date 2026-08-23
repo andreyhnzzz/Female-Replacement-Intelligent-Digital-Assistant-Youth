@@ -33,3 +33,7 @@ openpyxl>=3.1             # .xlsx de verdad; sin el se escribe .csv
 
 # --- opcionales ---
 # pytesseract             # OCR de pantalla; requiere el binario tesseract
+# winsdk                  # Bluetooth y wifi (Windows.Devices.Radios).
+#                         # Sin esto el puerto `radios` queda ausente y
+#                         # FRIDAY lo DICE en vez de fingir que no puede.
+#                         # El brillo no lo necesita: va por WMI con pywin32.
