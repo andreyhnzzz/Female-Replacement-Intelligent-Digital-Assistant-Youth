@@ -22,7 +22,10 @@ numpy~=2.5
 aiohttp~=3.14
 
 # --- acceso al sistema (Windows) ---
-pywin32~=312               # ventanas, foco, procesos
+pywin32>=312,<320          # ventanas, foco, procesos. Version de build
+                            # entera (306, 310, 312...), sin componente
+                            # menor: `~=` exige al menos dos numeros y
+                            # `~=312` no es un especificador valido.
 mss~=10.2                  # captura de pantalla (solo si activas OCR)
 
 # --- voz ---
