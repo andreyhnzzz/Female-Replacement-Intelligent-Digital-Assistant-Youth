@@ -570,6 +570,50 @@ async def main() -> int:
     check("sello no se filtra fuera del bloque", box.get("free") != "BLOQUEADO", str(box))
     privacy.uninstall()
 
+    # ══════════════════ EL HABLA SE NORMALIZA ANTES DE DECIDIR ═════
+    print()
+    print("  -- lo que llega del STT no es lo que escribiria nadie --")
+    from core.lang import (es_narrativo, es_pregunta, limpia, numero,
+                           parecido, slug_words)
+
+    check("un numero dictado con letras es un numero",
+          numero("volumen al veinte") == 20 and numero("treinta y cinco") == 35,
+          "int('veinte') lanza, y se caia al valor por defecto")
+    check("los digitos ganan a las frases hechas",
+          numero("ponlo a 5") == 5)
+    check("una cantidad vaga tambien es una cantidad",
+          numero("bajale un poco") == 10 and numero("ponlo al maximo") == 100,
+          "«un poco» daba 1 por el «un»")
+    check("sin numero no se inventa uno", numero("sube el volumen") is None)
+    check("las tres formas del mismo nombre coinciden",
+          slug_words("mi-proyecto") == slug_words("Mi Proyecto") == "mi proyecto")
+    check("el eco no repite las muletillas",
+          limpia("oye, friday, a ver, sube el volumen") == "sube el volumen")
+
+    check("preguntar por la maquina y quejarse de ella no es lo mismo",
+          es_pregunta("cuanta RAM me queda")
+          and es_narrativo("se me cayo el servidor de produccion"),
+          "misma familia de palabras, intenciones opuestas")
+
+    # ══════════════════ VOCABULARIO COMPARTIDO, INTENCIONES DISTINTAS ══
+    print()
+    print("  -- una palabra del dominio no es una peticion del dominio --")
+    met = skills["metricas"]
+    ag = skills["agenda"]
+    check("un desahogo con vocabulario tecnico no pide metricas",
+          met.matches("se me cayo el servidor de produccion y tengo "
+                      "una demo en veinte minutos") == 0.0,
+          "el caso del ROADMAP: contestaba con el uso de CPU")
+    check("pero preguntar por la maquina si",
+          met.matches("cuanta RAM me queda") > 0.6)
+    check("y un disparador propio no depende de la forma",
+          met.matches("dame las metricas") > 0.9)
+    check("«toda la mañana» es un momento, no una fecha",
+          ag.matches("llevo toda la mañana dandole vueltas") == 0.0,
+          "mañana tiene dos significados y solo uno es del calendario")
+    check("«que tengo mañana» sigue siendo la agenda",
+          ag.matches("que tengo mañana") > 0.5)
+
     shutil.rmtree(tmp, ignore_errors=True)
 
     bad = [n for n, ok, _ in results if not ok]
