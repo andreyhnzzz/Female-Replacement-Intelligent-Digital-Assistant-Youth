@@ -17,14 +17,68 @@ from .base import Skill, SkillContext, SkillResult
 INLINE_METRIC = re.compile(r"^\s*[-*]?\s*([\wÁÉÍÓÚÜÑáéíóúüñ ]{2,40}?)\s*::\s*(-?[\d.,]+)\s*(\w{0,12})\s*$", re.M)
 
 
+# ── disparadores fuertes: no aparecen en otra cosa ────────────────
+# Quien dice «vitales» o «KPI» esta pidiendo numeros, sin mas contexto.
+FUERTES = [
+    r"\bm[eé]tricas?\b", r"\bvitales\b", r"\bestad[ií]sticas?\b",
+    r"\bkpi\b", r"\bestado del (sistema|equipo)\b",
+    r"\buso de (cpu|ram|disco|memoria)\b", r"\bcu[aá]nt[ao] (ram|disco|cpu)\b",
+]
+
+# ── disparadores debiles: vocabulario del dominio que la gente usa para
+# hablar de otras cosas. «Se me cayo el servidor de produccion y tengo una
+# demo en veinte minutos» contiene `cuanto`... no, contiene `rendimiento`
+# cero, pero contiene el dominio; y «cuanto cuesta esto» contiene `cuanto`.
+# Solo cuentan si la frase ADEMAS pregunta.
+DEBILES = [
+    r"\bn[uú]meros?\b", r"\bstatus\b", r"\bcu[aá]nt[oa]s?\b",
+    r"\brendimiento\b", r"\bcpu\b", r"\bmemoria ram\b", r"\bram\b",
+    r"\bdisco\b", r"\bbater[ií]a\b", r"\buptime\b",
+]
+
+
 class MetricasSkill(Skill):
     name = "metricas"
     description = "Jala numeros: vitales del sistema y metricas registradas en el vault."
-    triggers = [
-        r"\bm[eé]tricas?\b", r"\bn[uú]meros?\b", r"\bvitales\b", r"\bestad[ií]sticas?\b",
-        r"\bstatus\b", r"\bestado del (sistema|equipo)\b", r"\bcu[aá]nt[oa]s?\b",
-        r"\bkpi\b", r"\brendimiento\b", r"\bcpu\b", r"\bmemoria ram\b",
-    ]
+    triggers = FUERTES + DEBILES
+
+    def matches(self, text: str) -> float:
+        """Puntaje propio, porque medio catalogo de esta skill son palabras
+        corrientes.
+
+        El caso que lo abrio (pruebas del 16/08/2026): *«se me cayo el
+        servidor de produccion y tengo una demo en veinte minutos»* se
+        enrutaba aqui y FRIDAY contestaba con el uso de CPU. No era un fallo
+        del puntaje generico —hizo lo que le tocaba— sino de los
+        disparadores: `cpu`, `disco` y `rendimiento` son vocabulario tecnico
+        que aparece constantemente en frases que **no** piden una lectura de
+        la maquina.
+
+        El puntaje no puede arreglarlo solo, igual que no podia con
+        «memoria»: un disparador corto y comun gana cuando nadie mas compite.
+        Asi que la regla es de forma, no de peso — **una palabra debil solo
+        vale si la frase pregunta**:
+
+            «cuanta RAM me queda»            -> pregunta, puntua
+            «se me lleno el disco ayer»      -> narra, cero
+            «dame las metricas»              -> fuerte, puntua igual
+
+        Un desahogo cae a conversacion libre, que es donde tiene que caer.
+        """
+        from core.lang import es_narrativo, es_pregunta
+
+        low = text.lower()
+        fuerte = any(re.search(p, low) for p in FUERTES)
+        base = super().matches(text)
+        if fuerte or base == 0.0:
+            return base
+
+        # Solo debiles: la frase tiene que estar preguntando por la maquina.
+        if es_narrativo(text) or not es_pregunta(text):
+            return 0.0
+        # Y aun preguntando, vale menos que un disparador propio: «cuanto
+        # tarda esto» pregunta, y no es una peticion de metricas.
+        return round(base * 0.75, 3)
 
     # -- vitales del sistema ------------------------------------------
     def system_vitals(self) -> dict[str, Any]:

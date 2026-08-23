@@ -30,7 +30,12 @@ class AgendaSkill(Skill):
     description = "Que viene: eventos y vencimientos del vault en el horizonte."
     triggers = [
         r"\bagenda\b", r"\bcalendario\b", r"\bqu[eé] sigue\b", r"\bpr[oó]xim[oa]s?\b",
-        r"\bhoy tengo\b", r"\bma[ñn]ana\b", r"\breuni[oó]n\b", r"\bcita\b",
+        r"\bhoy tengo\b", r"\breuni[oó]n\b", r"\bcita\b",
+        # «mañana» tiene dos significados y solo uno es una fecha. Con
+        # articulo delante es un momento del dia —«toda la mañana», «por la
+        # mañana»— y esas frases no piden la agenda: «llevo toda la mañana
+        # dandole vueltas» se enrutaba aqui y contestaba con el calendario.
+        r"(?<!la )(?<!las )(?<!una )\bma[ñn]ana\b",
         r"\bvence\b", r"\bdeadline\b", r"\bqu[eé] viene\b", r"\besta semana\b",
     ]
 
