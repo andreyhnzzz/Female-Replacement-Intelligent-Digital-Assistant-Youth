@@ -25,6 +25,45 @@ ADD_CUE = re.compile(r"\b(agenda|agenda[rm]e|apunta|programa|recu[eé]rdame|cita
                      r"s[aá]bado|domingo|\d{1,2})\b", re.I)
 
 
+def _mk(date: str, time_: str, title: str, source: str, done: bool,
+        tags: str) -> dict:
+    stamp = f"{date} {time_ or '00:00'}"
+    try:
+        dt = datetime.strptime(stamp, "%Y-%m-%d %H:%M")
+    except ValueError:
+        dt = datetime.strptime(date, "%Y-%m-%d")
+    return {"when": dt.isoformat(timespec="minutes"), "date": date,
+            "time": time_ or "", "title": title.strip(), "source": source,
+            "done": done, "tags": [t for t in re.findall(r"#([\w\-/]+)", tags or "")],
+            "ts": dt.timestamp()}
+
+
+def recolectar(vault) -> list[dict]:
+    """Todos los eventos del vault, ordenados y sin duplicados.
+
+    Funcion de modulo y no solo metodo de la skill porque tiene **dos**
+    llamadores que no se parecen: la skill, dentro de un turno y con su
+    `SkillContext`, y el reloj de `friday.py`, cada minuto y sin turno
+    ninguno. Pedirle al reloj que fabrique un contexto entero —motor,
+    politica, sistema— para leer unas lineas de markdown seria construir el
+    mundo para mirar un archivo.
+    """
+    events: list[dict] = []
+    for note in vault.all_notes():
+        for date, time_, title, tags in PIPE_EVENT.findall(note.body):
+            events.append(_mk(date, time_, title, note.title, False, tags))
+        for state, date, time_, title in INLINE_EVENT.findall(note.body):
+            events.append(_mk(date, time_, title, note.title,
+                              state.lower() == "x", ""))
+    seen, out = set(), []
+    for e in sorted(events, key=lambda e: e["when"]):
+        key = (e["when"], e["title"].lower())
+        if key not in seen:
+            seen.add(key)
+            out.append(e)
+    return out
+
+
 class AgendaSkill(Skill):
     name = "agenda"
     description = "Que viene: eventos y vencimientos del vault en el horizonte."
@@ -40,32 +79,7 @@ class AgendaSkill(Skill):
     ]
 
     def collect(self, ctx: SkillContext) -> list[dict]:
-        events: list[dict] = []
-        for note in ctx.vault.all_notes():
-            for date, time_, title, tags in PIPE_EVENT.findall(note.body):
-                events.append(self._mk(date, time_, title, note.title, False, tags))
-            for state, date, time_, title in INLINE_EVENT.findall(note.body):
-                events.append(self._mk(date, time_, title, note.title,
-                                       state.lower() == "x", ""))
-        seen, out = set(), []
-        for e in sorted(events, key=lambda e: e["when"]):
-            key = (e["when"], e["title"].lower())
-            if key not in seen:
-                seen.add(key)
-                out.append(e)
-        return out
-
-    @staticmethod
-    def _mk(date: str, time_: str, title: str, source: str, done: bool, tags: str) -> dict:
-        stamp = f"{date} {time_ or '00:00'}"
-        try:
-            dt = datetime.strptime(stamp, "%Y-%m-%d %H:%M")
-        except ValueError:
-            dt = datetime.strptime(date, "%Y-%m-%d")
-        return {"when": dt.isoformat(timespec="minutes"), "date": date,
-                "time": time_ or "", "title": title.strip(), "source": source,
-                "done": done, "tags": [t for t in re.findall(r"#([\w\-/]+)", tags or "")],
-                "ts": dt.timestamp()}
+        return recolectar(ctx.vault)
 
     async def run(self, ctx: SkillContext) -> SkillResult:
         horizon = int(self.opts.get("horizon_days", 7))

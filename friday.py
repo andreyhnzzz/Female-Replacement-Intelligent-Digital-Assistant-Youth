@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -38,10 +39,13 @@ from core.engine import build_engine
 from core.logbook import Logbook
 from core.policy import Policy
 from core.router import Router
+from core.scheduler import build_scheduler
 from memory.graph import Graph
 from memory.vault import Vault
 from skills import build_skills
+from skills.agenda import recolectar
 from system import build_system_access
+from system.ports import Notice
 
 BANNER = r"""
    ______ ____   ____ ____   ___ __   __
@@ -84,13 +88,32 @@ class Friday:
             "stt": "—", "stt_ok": False, "tts": "—", "tts_ok": False,
             "ptt_key": self.cfg.get("voice.ptt.key", "space"),
         }
+        self.scheduler = build_scheduler(self.cfg)
+
         self._busy = asyncio.Lock()
         self._stop = asyncio.Event()
         self._keeper: asyncio.Task | None = None
+        # Referencias vivas a todo lo que corre de fondo. Sin esto el
+        # recolector se puede llevar una tarea a medio correr: `create_task`
+        # no guarda una referencia fuerte, y una tarea recolectada
+        # desaparece sin ruido.
+        self._fondo: set[asyncio.Task] = set()
+        # Lo que el reloj ya disparo hoy. Se siembra leyendo la nota diaria
+        # al arrancar, asi que reiniciar a media mañana no repite el
+        # recordatorio de las nueve.
+        self._disparados: set[str] = set()
         self.loop: asyncio.AbstractEventLoop | None = None
 
     # ══════════════════════════════════════════ peticiones
-    async def handle(self, text: str, source: str = "ui") -> None:
+    async def handle(self, text: str, source: str = "ui",
+                     oido: float = 1.0) -> None:
+        """Un turno. `oido` es lo seguro que estaba el STT de la transcripcion.
+
+        Solo la voz lo manda distinto de 1.0. Viaja hasta el router porque es
+        el unico sitio donde todavia se puede hacer algo con esa duda: mas
+        abajo, la politica ya esta autorizando una accion perfectamente
+        legitima para una frase que quiza nadie dijo.
+        """
         text = (text or "").strip()
         if not text:
             return
@@ -104,7 +127,8 @@ class Friday:
 
             route = await self.router.decide(text)
             await self.bus.emit("router.decided", skill=route.skill, how=route.how,
-                                confidence=route.confidence, text=text)
+                                confidence=route.confidence, text=text,
+                                oido=round(oido, 3))
 
             if route.skill == "_mute" and self.tts:
                 self.tts.muted = True
@@ -116,7 +140,7 @@ class Friday:
                 await self.bus.emit("core.info", message="voz activa")
                 return
 
-            _, res = await self.router.dispatch(text, route)
+            _, res = await self.router.dispatch(text, route, oido=oido)
 
             await self.bus.emit(
                 "skill.result", skill=route.skill, speak=res.speak,
@@ -165,6 +189,16 @@ class Friday:
             if self.args.console or self.args.say:
                 print(f"\n\033[38;5;214m{ev.data.get('display') or text}\033[0m\n")
 
+        # Fuera del candado: mandar el aviso es red y puede tardar, y
+        # `Bus.emit` espera a sus handlers en linea — retener `_busy`
+        # mientras un POST agoniza contra su tope dejaria el siguiente turno
+        # esperando por algo que ya no le importa a nadie.
+        if (not ev.data.get("ya_avisado")
+                and bool(self.cfg.get("notify.mirror_say", True))):
+            await self._avisar(Notice(
+                title=str(ev.data.get("skill", "F.R.I.D.A.Y")),
+                body=text, tag="fondo"))
+
     # ══════════════════════════════════════════ voz
     def _on_utterance(self, audio, duration: float) -> None:
         """Corre en el hilo del PTT. Sella la red mientras transcribe."""
@@ -182,7 +216,16 @@ class Friday:
         self.bus.emit_threadsafe("voice.stt.final", text=text, duration=duration,
                                  **{k: v for k, v in result.items() if k != "text"})
         if text and self.loop:
-            asyncio.run_coroutine_threadsafe(self.handle(text, source="voz"), self.loop)
+            # La confianza del STT no se queda en el evento: viaja con el
+            # turno. Es el unico dato que distingue «lo dijo» de «eso creo
+            # que dijo», y sin el una orden mal oida llega al guardia con
+            # aspecto de orden perfecta.
+            try:
+                oido = float(result.get("confidence", 1.0))
+            except (TypeError, ValueError):
+                oido = 1.0
+            asyncio.run_coroutine_threadsafe(
+                self.handle(text, source="voz", oido=oido), self.loop)
 
     async def _start_voice(self) -> None:
         from voice.ptt import PushToTalk
@@ -239,6 +282,149 @@ class Friday:
                 await asyncio.wait_for(self._stop.wait(), timeout=interval)
             except asyncio.TimeoutError:
                 pass
+
+    # ══════════════════════════════════════════ tareas de fondo
+    def _supervisar(self, coro, nombre: str) -> asyncio.Task:
+        """Lanza algo de fondo con referencia viva y fallo audible.
+
+        Dos trampas conocidas de una sola vez. `asyncio.create_task` no
+        guarda una referencia fuerte, asi que el recolector puede llevarse
+        la tarea a mitad; y una excepcion dentro de una tarea que nadie
+        espera se queda en el objeto sin que la vea nadie — el mismo agujero
+        que `add_done_callback` cierra en `Bus.emit_threadsafe`. Un bucle de
+        fondo que muere en silencio es peor que uno que no arranca: parece
+        que funciona.
+        """
+        task = asyncio.create_task(coro, name=nombre)
+        self._fondo.add(task)
+
+        def _acabo(t: asyncio.Task) -> None:
+            self._fondo.discard(t)
+            if t.cancelled():
+                return
+            exc = t.exception()
+            if exc is not None:
+                self.bus.report(f"la tarea «{nombre}» murio: {exc!r}",
+                                origen="friday")
+
+        task.add_done_callback(_acabo)
+        return task
+
+    # ══════════════════════════════════════════ el reloj
+    async def _programador(self) -> None:
+        """Lo que FRIDAY hace sin que se lo pidas: recordatorios y trabajos.
+
+        El reparto es el mismo de siempre: `core/scheduler.py` decide y no
+        toca nada, y aqui estan los efectos. Dos reglas que no son de estilo:
+
+        - **Un recordatorio habla por `core.say`, no por `core.info`.** Lo
+          contrario que el ama de llaves, y por el mismo motivo: contar que
+          ordenaste tus archivos es interrumpir, avisar de una reunion en
+          diez minutos es el trabajo. `_on_say` ya toma el candado, asi que
+          un aviso nunca pisa un turno en curso — espera su vez.
+        - **Leer la agenda va a un hilo.** Recorre y parsea el vault entero
+          (regla 1: no hay indice), y hacerlo en el bucle de eventos cada
+          minuto es congelar el HUD cada minuto.
+        """
+        from core import scheduler as _sched
+        tick = max(_sched.TICK_MINIMO_S, float(self.cfg.get("schedule.tick_s", 60)))
+        await asyncio.to_thread(self._sembrar_disparos)
+
+        while not self._stop.is_set():
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=tick)
+                return                             # nos estamos apagando
+            except asyncio.TimeoutError:
+                pass
+
+            try:
+                eventos = await asyncio.to_thread(recolectar, self.vault)
+                disparos = self.scheduler.due(eventos=eventos,
+                                              ya_disparado=self._disparados)
+            except Exception as exc:
+                self.bus.report(f"el reloj no pudo mirar la agenda: {exc}",
+                                origen="reloj")
+                continue
+
+            for disparo in disparos:
+                # La marca se pone ANTES de actuar. Si el trabajo tarda mas
+                # que un tick —un briefing con el motor lento tarda— el tick
+                # siguiente volveria a encontrarlo vencido y lo lanzaria
+                # otra vez.
+                self._disparados.add(disparo.clave)
+                try:
+                    await self._disparar(disparo)
+                except Exception as exc:
+                    self.bus.report(f"disparo «{disparo.titulo}» fallo: {exc}",
+                                    origen="reloj")
+
+    async def _disparar(self, disparo) -> None:
+        """Un disparo, ya decidido. Recordatorio se dice; trabajo se enruta."""
+        await self.bus.emit("schedule.fired", kind=disparo.kind,
+                            titulo=disparo.titulo, clave=disparo.clave)
+
+        if disparo.kind == "recordatorio":
+            await self.bus.emit(
+                "core.say", text=disparo.texto,
+                display=f"# Recordatorio\n\n**{disparo.titulo}**\n\n"
+                        f"{disparo.texto}",
+                skill="agenda",
+                # El espejo de `_on_say` reenvia fuera todo lo que se dice
+                # desde segundo plano, y este disparo ademas trae su propio
+                # `notify`: sin esta marca, un recordatorio llegaba dos veces
+                # al movil. Avisa el disparo, que es quien sabe la urgencia.
+                ya_avisado=True)
+        else:
+            # Un trabajo dice una frase, y la frase entra por la puerta de
+            # siempre: router, politica, confirmacion. El reloj no es una
+            # credencial — si la frase acaba en algo que espera un «si», se
+            # queda esperandolo (regla 6).
+            await self.handle(disparo.texto, source="reloj")
+
+        if disparo.notify:
+            await self._avisar(Notice(title=disparo.titulo or "F.R.I.D.A.Y",
+                                      body=disparo.texto,
+                                      urgencia=disparo.urgencia,
+                                      tag=disparo.kind))
+
+        # Queda escrito en la diaria: sirve de tope entre reinicios y ademas
+        # deja en el diario que FRIDAY te aviso, que es lo que querrias leer
+        # al repasar el dia. Markdown, como todo (regla 1).
+        try:
+            await asyncio.to_thread(
+                self.vault.log, f"[reloj:{disparo.clave}] {disparo.titulo}",
+                "reloj")
+        except Exception:
+            pass                    # no avisar por no poder anotar seria peor
+
+    def _sembrar_disparos(self) -> None:
+        """Lo que el reloj ya disparo hoy, leido de la nota diaria.
+
+        Sin esto, reiniciar dentro de la ventana de gracia repite el aviso.
+        Con esto, la marca sobrevive al reinicio sin inventar un archivo de
+        estado: ya estaba escrita donde tenia que estar.
+        """
+        try:
+            cuerpo = self.vault.daily().body
+        except Exception:
+            return
+        for m in re.finditer(r"\[reloj:([^\]]+)\]", cuerpo):
+            self._disparados.add(m.group(1))
+
+    async def _avisar(self, notice: Notice) -> None:
+        """Manda un aviso fuera del equipo, si hay a donde y esta permitido."""
+        puerto = getattr(self.system, "notify", None)
+        if puerto is None:
+            return
+        try:
+            ok = await puerto.send(notice)
+        except Exception as exc:
+            self.bus.report(f"aviso no enviado: {exc}", origen="notify")
+            return
+        if not ok:
+            self.bus.report(
+                f"aviso no enviado: {getattr(puerto, 'last_error', '')}",
+                origen="notify")
 
     # ══════════════════════════════════════════ el ama de llaves
     async def _memory_keeper(self) -> None:
@@ -339,9 +525,25 @@ class Friday:
         if self.cfg.get("voice.enabled", True) and not self.args.no_voice:
             await self._start_voice()
 
-        asyncio.create_task(self._tick())
+        self._supervisar(self._tick(), "latido")
         if self.cfg.get("vault.consolidate.enabled", True):
-            self._keeper = asyncio.create_task(self._memory_keeper())
+            self._keeper = self._supervisar(self._memory_keeper(), "ama de llaves")
+
+        if self.cfg.get("schedule.enabled", True):
+            self._supervisar(self._programador(), "reloj")
+            proximo = self.scheduler.proximo()
+            trabajos = len(self.scheduler.jobs)
+            await self.bus.emit(
+                "core.info",
+                message=(f"reloj: {trabajos} trabajos"
+                         + (f", siguiente {proximo}" if proximo else "")
+                         + f" · avisa {self.scheduler.lead_min} min antes"))
+
+        notificador = getattr(self.system, "notify", None)
+        if notificador is not None:
+            await self.bus.emit("core.info",
+                                message=f"avisos fuera: {notificador.describe()}")
+
         await self.bus.emit("core.info", message="F.R.I.D.A.Y en linea.")
 
     def _seed_vault(self) -> None:
@@ -365,8 +567,8 @@ class Friday:
 
     async def shutdown(self) -> None:
         self._stop.set()
-        if self._keeper:
-            self._keeper.cancel()
+        for task in list(self._fondo):
+            task.cancel()
         if self.ptt:
             self.ptt.stop()
         if self.tts:
@@ -378,6 +580,13 @@ class Friday:
             from system import net
             await net.close()
         except Exception:
+            pass
+        # El hilo de dispositivos tiene COM inicializado: si nadie lo cierra,
+        # el proceso se queda esperandolo al salir.
+        try:
+            from system.win32.radios import DISPOSITIVOS
+            DISPOSITIVOS.cierra()
+        except ImportError:
             pass
 
 
@@ -479,9 +688,43 @@ async def check(cfg_path: str | None) -> int:
 
     policy = Policy(cfg)
     access = build_system_access(cfg, policy)
+    # «No en esta plataforma» era mentira para dos de ellos: la plataforma es
+    # la correcta y lo que falta es un paquete o un destino en el toml.
+    # Mandar a alguien a buscar un problema de Windows cuando le falta un
+    # `pip install` es el mismo fallo que decir «no te entendi» cuando lo que
+    # pasa es que no sabes hacerlo.
+    _POR_QUE_NO = {
+        "radios": "faltan las proyecciones WinRT: pip install winsdk",
+        "notify": "sin destino declarado en [notify] del toml",
+        "display": "ningun panel de este equipo acepta control por software",
+    }
     for cap, on in access.available().items():
         rows.append((f"acceso · {cap}", on,
-                     "disponible" if on else "no en esta plataforma", False))
+                     "disponible" if on
+                     else _POR_QUE_NO.get(cap, "no en esta plataforma"), False))
+
+    # El reloj y la puerta de salida: dos capacidades que se notan por su
+    # ausencia y no dan ningun error cuando faltan. Sin una linea aqui, un
+    # `[[schedule.jobs]]` mal escrito es indistinguible de uno que no
+    # dispara, y eso son horas de mirar el registro.
+    from core.scheduler import build_scheduler
+    reloj = build_scheduler(cfg)
+    encendido = bool(cfg.get("schedule.enabled", True))
+    cuantos = len(reloj.jobs)
+    rows.append(("reloj", encendido and bool(cuantos),
+                 (f"{cuantos} trabajo{'s' if cuantos != 1 else ''}"
+                  + (f" · siguiente {reloj.proximo()}" if reloj.proximo() else ""))
+                 if encendido else "apagado en el toml", False))
+
+    # El puerto `notify` ya sale arriba con su motivo; aqui lo que falta por
+    # decir es si la POLITICA lo permite, que es otra pregunta: se puede
+    # tener destino configurado y el interruptor en false.
+    avisador = access.notify
+    rows.append(("avisos fuera", avisador is not None and policy.allow_notify,
+                 avisador.describe() if avisador is not None and policy.allow_notify
+                 else ("hay destino, pero policy.allow_notify esta en false"
+                       if avisador is not None else "sin destino en [notify]"),
+                 False))
 
     v = Vault(cfg.vault_root)
     st = v.stats()

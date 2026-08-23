@@ -249,6 +249,13 @@ allow_web_fetch    = true     # que FRIDAY salga a la red por su cuenta
 allow_media        = true     # volumen y reproduccion
 allow_clipboard    = true     # leer y escribir el portapapeles
 allow_session      = false    # bloquear/suspender: apagado por defecto
+allow_display      = true     # brillo de la pantalla: se deshace solo
+# Bluetooth y wifi. **Apagado de fabrica y no por prudencia generica**:
+# apagar el wifi te deja sin red, y si tu motor es remoto deja muda a la
+# propia FRIDAY a media frase. Encender una radio no se confirma; apagarla
+# si, siempre — esa asimetria la aplica `policy.can_control(desconecta=)`.
+# Necesita ademas las proyecciones WinRT: `pip install winsdk`.
+allow_radio        = false
 allow_agent        = true     # delegarle trabajo a un agente dentro de un repo
 confirm_over_files = 5        # sobre este numero, pide confirmacion hablada
 
@@ -258,6 +265,13 @@ confirm_over_files = 5        # sobre este numero, pide confirmacion hablada
 # Apagalo y FRIDAY seguira consolidando, pero sin quitar nada — el resumen
 # se escribe igual y el disco no baja.
 allow_memory_prune = true
+
+# Mandar avisos FUERA del equipo (ver `[notify]`). Apagado de fabrica: no
+# es `allow_web_fetch` al reves. Descargar una pagina trae datos de fuera;
+# esto manda datos TUYOS —lo que FRIDAY te iba a decir en voz alta, que sale
+# de tu agenda y de tus proyectos— a un servicio de terceros. La direccion
+# del flujo es la diferencia, y por eso el permiso es propio.
+allow_notify       = false
 
 # Donde PUEDE escribir. Fuera de aqui, no.
 write_roots = ["~/Documents", "~/Downloads", "~/Desktop", "~/Pictures"]
@@ -432,6 +446,91 @@ max_chars = 12000
 #
 # Sirve para que «y eso cuanto cuesta» tenga a que referirse.
 # ----------------------------------------------------------
+# ----------------------------------------------------------
+# EL RELOJ  —  lo que FRIDAY hace sin que se lo pidas
+# ----------------------------------------------------------
+# Dos cosas distintas viven aqui:
+#
+#   RECORDATORIOS  no se declaran. Salen de los eventos con hora de tu
+#                  agenda (`wiki/Agenda.md` y cualquier nota con una linea
+#                  `- 2026-08-24 09:00 | Lo que sea |`). Avisan una vez.
+#   TRABAJOS       los de abajo. Una hora del dia, o un intervalo.
+#
+# Un trabajo dice una FRASE, y esa frase entra por la puerta de siempre:
+# router, politica, confirmacion. El reloj no es una credencial — si la
+# frase acaba en algo que espera un «si», se queda esperandolo. Eso
+# significa tambien que cualquier capacidad que exista es programable el
+# dia que existe, sin tocar codigo.
+[schedule]
+enabled    = true
+tick_s     = 60     # cada cuanto mira. Por debajo de 15 se ignora.
+lead_min   = 15     # cuanto ANTES avisa de un evento con hora
+# Y cuanto DESPUES sigue teniendo sentido avisar. Sin gracia, un equipo
+# dormido durante el minuto exacto se come el aviso; con una gracia larga,
+# te enteras de la reunion cuando ya termino.
+gracia_min = 10
+
+# Las marcas de «esto ya lo dispare» se escriben en la nota diaria, no en
+# un archivo de estado (regla 1). Reiniciar a media mañana no repite el
+# recordatorio de las nueve, y de paso queda en el diario que te aviso.
+
+[[schedule.jobs]]
+name   = "briefing"
+at     = "08:30"
+days   = ["lun", "mar", "mie", "jue", "vie"]   # o "laborables", o "diario"
+do     = "dame el briefing de la mañana"
+speak  = true
+notify = false      # ademas, al movil (necesita `[notify]`)
+
+[[schedule.jobs]]
+name    = "repaso"
+at      = "18:00"
+days    = ["laborables"]
+do      = "que tengo pendiente"
+enabled = false     # de ejemplo: enciendelo si lo quieres
+
+# Tambien se puede por intervalo en vez de por hora:
+#
+#     [[schedule.jobs]]
+#     name  = "titulares"
+#     every = "6h"
+#     do    = "dame las noticias"
+#
+# El primer tick tras arrancar NO dispara los de intervalo: si no, encender
+# FRIDAY lanzaria de golpe todo lo declarado «cada seis horas».
+
+# ----------------------------------------------------------
+# AVISOS FUERA DEL EQUIPO  —  la puerta de salida
+# ----------------------------------------------------------
+# El caso que la voz no cubre: un encargo al taller tarda veinte minutos, y
+# a esa hora puedes estar en otra habitacion. Hablarle a una silla vacia no
+# es avisar.
+#
+# **Solo sale, nunca entra.** FRIDAY no acepta ordenes que lleguen de
+# fuera. Aceptarlas sortearia de un golpe el push-to-talk, la confirmacion
+# hablada y la politica — los tres guardias que existen porque el STT se
+# equivoca — y convertiria un token filtrado en control de tu maquina.
+#
+# Necesita ADEMAS `policy.allow_notify = true`. Declarar un destino no es
+# concederselo (regla 6).
+[notify]
+enabled    = false
+kind       = "ntfy"        # ntfy | webhook | telegram
+timeout_s  = 10
+
+# ntfy: el mas simple. Instala la app, elige un tema dificil de adivinar
+# —cualquiera que sepa el nombre puede leerlo— y ponlo aqui.
+target     = ""            # p.ej. "https://ntfy.sh/tu-tema-privado-9f3a"
+
+# telegram: el token NO va aqui, va en el entorno. Este archivo se versiona.
+token_env  = "TELEGRAM_BOT_TOKEN"
+chat_id    = ""
+
+# Reenviar tambien lo que FRIDAY dice desde segundo plano (`core.say`): el
+# resultado de un encargo al taller, sobre todo. Los recordatorios ya lo
+# hacen por su cuenta.
+mirror_say = true
+
 [chat]
 max_turns        = 12        # turnos que se recuerdan (usuario + FRIDAY)
 max_chars        = 4000      # tope duro del hilo; recorta por lo mas viejo
