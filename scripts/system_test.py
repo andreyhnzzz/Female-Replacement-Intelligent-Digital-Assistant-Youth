@@ -231,12 +231,35 @@ def _con_texto(ctx, texto: str):
 
 
 async def main() -> int:
-    sandbox = Path(tempfile.mkdtemp(prefix="friday_sys_"))
+    # Resuelto de entrada: `Policy._resolve_roots()` ya resuelve cada raiz
+    # que declaras (`agent_roots`, `write_roots`...), y en el runner de
+    # Windows de CI `%TEMP%` puede venir en su forma corta (8.3) mientras
+    # `Path.resolve()` la expande a la larga. Sin esto, comparar
+    # `sandbox / "algo"` (sin resolver) contra una ruta que salio de la
+    # politica (resuelta) fallaba aunque fueran la misma carpeta — el
+    # mismo bug que ya se arreglo en `memory/vault.py`, aqui en el sandbox
+    # de pruebas.
+    sandbox = Path(tempfile.mkdtemp(prefix="friday_sys_")).resolve()
     print(f"\n  F.R.I.D.A.Y — pruebas de sistema\n  sandbox: {sandbox}\n")
 
     cfg = FakeCfg(sandbox)
     policy = Policy(cfg)
     seed(sandbox)
+
+    # Regresion: `Policy._resolve_roots()` resuelve cada raiz declarada,
+    # asi que una raiz dada en su forma corta (8.3) y una ruta construida
+    # a mano desde la forma larga tienen que coincidir. Se reproduce con
+    # el alias 8.3 real (ver la misma tecnica en smoke_test.py) porque
+    # pathlib ya normaliza "." y mayus/minus en Windows por su cuenta.
+    if sys.platform == "win32":
+        import ctypes
+        buf = ctypes.create_unicode_buffer(260)
+        ok = ctypes.windll.kernel32.GetShortPathNameW(str(sandbox), buf, 260)
+        corto = Path(buf.value) if ok else sandbox
+        if str(corto) != str(sandbox):
+            pol_corta = Policy(FakeCfg(sandbox, agent_roots=[str(corto)]))
+            check("una raiz en forma corta resuelve a la misma ruta que la larga",
+                  pol_corta.agent_roots == [sandbox], str(pol_corta.agent_roots))
 
     # ══════════════════ POLITICA ══════════════════
     print("  ── politica ──")
