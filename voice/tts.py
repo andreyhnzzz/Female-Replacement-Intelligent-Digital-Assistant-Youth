@@ -28,6 +28,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from core.proc import NO_WINDOW
+
 # Banderas de ISpVoice::Speak
 SVSF_ASYNC = 1          # vuelve enseguida; se espera con WaitUntilDone
 SVSF_PURGE = 2          # descarta lo que estuviera sonando
@@ -285,10 +287,11 @@ class LocalTTS:
         wav = Path(self.model_dir) / "_out.wav"
         subprocess.run([exe, "-m", model, "-f", str(wav)],
                        input=text.encode("utf-8"), check=True,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       creationflags=NO_WINDOW)
         try:
-            import soundfile as sf
             import sounddevice as sd
+            import soundfile as sf
             data, rate = sf.read(str(wav), dtype="float32")
             sd.play(data * self.volume, rate)
             self._wait_playback(sd)

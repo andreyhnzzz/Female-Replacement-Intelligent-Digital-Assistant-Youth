@@ -1,13 +1,19 @@
-"""Candado de privacidad del audio.
+"""Dos candados de privacidad: el audio y lo que queda por escrito.
 
-No basta con decir "es local". Mientras STT o TTS procesan, este guardia
-intercepta socket.connect y revienta cualquier intento de salir a una IP
-que no sea loopback. Si un dia una dependencia intenta "telemetria",
-lo vas a ver en el HUD, no en un blog seis meses despues.
+El primero: mientras STT o TTS procesan, este guardia intercepta
+socket.connect y revienta cualquier intento de salir a una IP que no sea
+loopback. Si un dia una dependencia intenta "telemetria", lo vas a ver en
+el HUD, no en un blog seis meses despues.
+
+El segundo: `redact()` tacha del texto lo que `[privacy] redact_in_logs`
+declare antes de que llegue a la bitacora o a un aviso reenviado a un
+tercero (`notify.mirror_say`). Sin esto, esa lista del toml es una promesa
+sin cablear — cualquiera puede escribirla y nada la lee.
 """
 from __future__ import annotations
 
 import ipaddress
+import re
 import socket
 import threading
 from contextlib import contextmanager
@@ -76,3 +82,23 @@ def sealed():
         yield
     finally:
         _local.sealed = prev
+
+
+def redact(text: str, patterns: list[str] | tuple[str, ...]) -> str:
+    """Tacha cada patron de `patterns` en `text` por `[REDACTADO]`.
+
+    Coincidencia literal (no regex) e insensible a mayusculas: la lista la
+    escribe el usuario a mano en el toml, y una regex mal formada ahi no
+    puede tumbar el logueo de cada evento del bus. Sin patrones o sin
+    texto, devuelve tal cual — el caso comun (`redact_in_logs = []`) no
+    paga ningun costo.
+    """
+    if not patterns or not text:
+        return text
+    out = text
+    for pat in patterns:
+        pat = str(pat).strip()
+        if not pat:
+            continue
+        out = re.sub(re.escape(pat), "[REDACTADO]", out, flags=re.IGNORECASE)
+    return out

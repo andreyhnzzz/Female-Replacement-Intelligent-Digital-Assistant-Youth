@@ -504,7 +504,11 @@ allow_memory_prune = true         # retirar diarias ya resumidas (solo del vault
 confirm_over_files = 5            # sobre esto, pide confirmación hablada
 write_roots  = ["~/Documents", "~/Downloads", "~/Desktop", "~/Pictures"]
 agent_roots  = []                    # dónde puede soltar un agente (vacía = apagado)
-blocked_apps = ["regedit*", "diskpart*", "cmd.exe", "powershell*"]
+blocked_apps = ["regedit*", "diskpart*", "cmd.exe", "powershell*", "pwsh*",
+                "wt.exe", "wsl.exe", "mmc.exe", "control.exe", "certutil.exe",
+                "bitsadmin.exe", "wscript.exe", "cscript.exe", "mshta.exe",
+                "rundll32.exe", "regsvr32.exe", "reg.exe", "sc.exe",
+                "schtasks.exe", "wmic.exe", "net.exe", "net1.exe", "taskkill.exe"]
 ```
 
 `allow_web` y `allow_web_fetch` son permisos distintos a propósito: uno entrega

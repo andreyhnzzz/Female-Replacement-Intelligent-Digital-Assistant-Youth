@@ -10,13 +10,47 @@ Compatible con Obsidian sin plugins: frontmatter YAML + [[wikilinks]].
 """
 from __future__ import annotations
 
+import getpass
 import re
+import subprocess
+import sys
+import time
 import unicodedata
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable
+
+from core.proc import NO_WINDOW
+
+
+def _restrict_to_owner(root: Path) -> None:
+    """Quita herencia y deja el vault legible solo por el usuario actual.
+
+    **Apagado de fabrica** (`[privacy] restrict_vault_permissions`, ver
+    `Vault.__init__`). `/inheritance:r` no solo saca a "todos": tambien saca
+    a SYSTEM y a Administradores, que es exactamente lo que un backup, un
+    antivirus o una reinstalacion pueden necesitar para tocar la carpeta.
+    Es un candado real pero de los que hay que pedir, no de los que se
+    activan solos la primera vez que alguien instala FRIDAY — mover
+    permisos de una carpeta que ya existia es la clase de accion que se
+    confirma antes, no despues.
+
+    Windows unicamente, y mejor esfuerzo: si `icacls` no esta o el volumen
+    no soporta ACL (FAT32, unidad de red), no hay nada que romper — el
+    vault sigue siendo el mismo directorio de markdown de siempre.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        subprocess.run(
+            ["icacls", str(root), "/inheritance:r",
+             "/grant:r", f"{getpass.getuser()}:(OI)(CI)F"],
+            capture_output=True, timeout=5, check=False,
+            creationflags=NO_WINDOW)
+    except (OSError, subprocess.SubprocessError):
+        pass
 
 # Palabras que aparecen en todas las notas y por tanto no distinguen ninguna.
 # La lista es corta a proposito: solo lo estructural del castellano hablado.
@@ -136,7 +170,8 @@ class Vault:
     """Lectura/escritura del vault. Todo es un archivo, siempre."""
 
     def __init__(self, root: Path | str, raw="raw", wiki="wiki", outputs="outputs",
-                 daily_format="%Y-%m-%d", cache_max: int = 512):
+                 daily_format="%Y-%m-%d", cache_max: int = 512,
+                 restrict_permissions: bool = False):
         self.root = Path(root)
         self.raw = self.root / raw
         self.wiki = self.root / wiki
@@ -154,14 +189,41 @@ class Vault:
         # `all_notes()`, o sea que dependia de que llamaras a ese metodo.
         self._cache: OrderedDict[Path, tuple[float, int, Note]] = OrderedDict()
         self._cache_max = max(64, int(cache_max))
+        # `files()` es un `rglob` sobre todo el vault, y un turno hablado lo
+        # recorre varias veces (`search`, `stats`, el grafo). El cache de
+        # notas ya amortigua el PARSEO; esto amortigua el LISTADO en si, que
+        # sigue costando O(archivos) aunque cada nota este cacheada. TTL
+        # corto y no infinito: una escritura de otro proceso (Obsidian
+        # abierto a la vez) se nota en unos segundos, no nunca.
+        self._files_cache: list[Path] | None = None
+        self._files_ts = 0.0
+        self._files_ttl = 3.0
         for d in (self.raw, self.wiki, self.outputs):
             d.mkdir(parents=True, exist_ok=True)
+        # Apagado de fabrica (ver `_restrict_to_owner`): tocar permisos de
+        # una carpeta que el usuario ya tenia no es una mejora silenciosa,
+        # es un cambio que se pide. `[privacy] restrict_vault_permissions`
+        # en el toml lo activa para quien lo quiera.
+        if restrict_permissions:
+            _restrict_to_owner(self.root)
 
     # -- lectura ------------------------------------------------------
     def files(self) -> Iterable[Path]:
-        for p in self.root.rglob("*.md"):
-            if ".obsidian" not in p.parts and ".trash" not in p.parts:
-                yield p
+        now = time.time()
+        if self._files_cache is None or (now - self._files_ts) >= self._files_ttl:
+            self._files_cache = [
+                p for p in self.root.rglob("*.md")
+                if ".obsidian" not in p.parts and ".trash" not in p.parts]
+            self._files_ts = now
+        yield from self._files_cache
+
+    def _invalida_listado(self) -> None:
+        """Un archivo se creo o se fue: el listado cacheado ya no vale.
+
+        Sin esto, escribir una nota y buscarla en el mismo segundo podia no
+        encontrarla — el TTL de `files()` la habria dejado fuera.
+        """
+        self._files_cache = None
 
     def read(self, path: Path | str) -> Note:
         p = self._resolve(path)
@@ -209,6 +271,8 @@ class Vault:
         # dentro del mismo tick del reloj pueden dar igual (mtime, size) y la
         # relectura devolveria el contenido viejo.
         self._cache.pop(p, None)
+        if not p.exists():
+            self._invalida_listado()
 
         if mode in ("append", "prepend") and p.exists():
             old = p.read_text(encoding="utf-8", errors="replace")
@@ -280,6 +344,7 @@ class Vault:
         """Retira una nota a la papelera. Devuelve donde quedo."""
         p = self._resolve(path)
         self._cache.pop(p, None)
+        self._invalida_listado()
         self.trash_dir.mkdir(parents=True, exist_ok=True)
         # El nombre lleva la zona: dos `2026-07-01.md` de zonas distintas se
         # pisarian, y la que se pierde es la que ya no esta en su sitio.

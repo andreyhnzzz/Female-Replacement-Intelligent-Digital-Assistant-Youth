@@ -165,7 +165,14 @@ class ClaudeCodeEngine(Engine):
             # hace a mano en la terminal.
             if perm == "bypassPermissions":
                 perm = "acceptEdits"
-            tools = kw.get("tools") or self.tools
+            # Sin lista explicita, CERO herramientas — no la del toml. Esa
+            # lista esta pensada para el taller, que ya filtra contra
+            # politica antes de llegar aqui (regla 6); heredarla como
+            # default general dejaria a un futuro llamador con escritura
+            # sin haber pasado por `policy.can_delegate`.
+            tools = kw.get("tools")
+            if tools is None:
+                tools = []
 
             argv += ["--permission-mode", perm,
                      "--max-turns", str(kw.get("max_turns", self.max_turns))]

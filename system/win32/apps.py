@@ -377,20 +377,33 @@ class WindowsAppLauncher:
             return False
 
         self.last_error = ""
-        try:
-            if app.kind in ("uri", "shortcut", "uwp"):
-                # os.startfile respeta el shell, y el shell es quien sabe
-                # abrir un .lnk, una `steam://` y un `shell:AppsFolder\...`.
-                # Una app empaquetada no tiene ejecutable que invocar: solo
-                # existe para el shell, asi que este es el unico camino.
+
+        if app.kind in ("uri", "shortcut", "uwp"):
+            # os.startfile respeta el shell, y el shell es quien sabe abrir
+            # un .lnk, una `steam://` y un `shell:AppsFolder\...`. Una app
+            # empaquetada no tiene ejecutable que invocar: solo existe para
+            # el shell, asi que este es el unico camino — no hay un segundo
+            # intento razonable si este falla.
+            try:
                 os.startfile(app.target)  # noqa: S606
                 return True
-            cmd = [app.target, *(args or [])]
-            subprocess.Popen(cmd, shell=False,
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except OSError as exc:
+                self.last_error = str(exc)[:160]
+                return False
+
+        # kind == "exe": el camino normal es el proceso directo. El
+        # fallback a `os.startfile` es SOLO para cuando `app.target` es un
+        # nombre suelto que el shell resuelve por asociacion/PATH y
+        # `Popen(shell=False)` no ("explorer.exe" sin ruta, por ejemplo) —
+        # no amplia lo que se ejecuta: `app.target` ya paso `can_launch`
+        # arriba, y viene del catalogo curado, nunca de una busqueda en
+        # disco (eso es `open_path`, con su propia politica `can_open`).
+        try:
+            subprocess.Popen([app.target, *(args or [])], shell=False,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             creationflags=NO_WINDOW)
             return True
         except OSError as exc:
-            # ultimo recurso: dejar que el shell resuelva el nombre
             try:
                 os.startfile(app.target)  # noqa: S606
                 return True

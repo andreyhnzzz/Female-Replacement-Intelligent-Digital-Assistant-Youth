@@ -1,35 +1,45 @@
 # F.R.I.D.A.Y — Python 3.12 recomendado
 # Acompanante de escritorio. Todo corre local: nada de esto llama a una
 # API de terceros en ejecucion.
+#
+# Rangos con techo (`~=X.Y`), no `>=` sueltos: una mayor de cualquiera de
+# estos paquetes (o un ataque de dependency confusion con un nombre
+# parecido) no se instala sola en una maquina de un usuario final. Para
+# una instalacion reproducible byte a byte, usa el lock:
+#   pip install -r requirements.lock.txt
+# El lock se regenera con `pip freeze > requirements.lock.txt` dentro del
+# venv despues de tocar este archivo.
 
 # --- acompanante (ventana nativa, no navegador) ---
-PySide6>=6.6              # Qt Quick + QtQuick3D: el nucleo y el panel
+PySide6~=6.11              # Qt Quick + QtQuick3D: el nucleo y el panel
 
 # --- nucleo ---
-psutil>=5.9               # vitales del sistema
-numpy>=1.26
+psutil~=7.2                # vitales del sistema
+numpy~=2.5
 # Toda la salida a la red: core/http.py, system/net.py, system/news.py y los
 # adaptadores `anthropic_api` y `openai_compat`. Sin esto el diagnostico sigue
 # diciendo «acceso · news disponible» y la primera peticion revienta.
-aiohttp>=3.9
+aiohttp~=3.14
 
 # --- acceso al sistema (Windows) ---
-pywin32>=306              # ventanas, foco, procesos
-mss>=9.0                  # captura de pantalla (solo si activas OCR)
+pywin32~=312               # ventanas, foco, procesos
+mss~=10.2                  # captura de pantalla (solo si activas OCR)
 
 # --- voz ---
-sounddevice>=0.4.6        # captura y reproduccion
-pynput>=1.7.6             # push-to-talk global
-faster-whisper>=1.0.3     # STT local (CTranslate2, sin nube)
+sounddevice~=0.5           # captura y reproduccion
+pynput~=1.8                # push-to-talk global
+faster-whisper~=1.2        # STT local (CTranslate2, sin nube)
 
 # --- TTS (basta con uno; el codigo cae al que exista) ---
-pyttsx3>=2.90             # SAPI5 de Windows, local, cero descargas
-piper-tts>=1.2.0          # voz neuronal local (mejor calidad)
-soundfile>=0.12           # solo si usas piper por CLI
+pyttsx3~=2.99               # SAPI5 de Windows, local, cero descargas
+piper-tts>=1.2.0,<2.0       # voz neuronal local (mejor calidad); sin pin
+                            # exacto porque no esta en el lock (opcional,
+                            # no instalado en este entorno de referencia)
+soundfile>=0.12,<1.0        # solo si usas piper por CLI
 
 # --- documentos ---
 # El PDF no lleva dependencia: lo maqueta Qt (QPdfWriter), que ya esta arriba.
-openpyxl>=3.1             # .xlsx de verdad; sin el se escribe .csv
+openpyxl>=3.1,<4.0          # .xlsx de verdad; sin el se escribe .csv
 
 # --- opcionales ---
 # pytesseract             # OCR de pantalla; requiere el binario tesseract

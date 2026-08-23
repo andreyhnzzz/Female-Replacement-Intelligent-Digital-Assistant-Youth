@@ -296,8 +296,17 @@ read_roots  = ["~"]
 # NO pongas "~": tu perfil entero incluye AppData, y ademas dejaria al
 # agente ver cualquier cosa que tengas en el escritorio.
 agent_roots = []
-# Nunca se lanzan, aunque esten instalados.
-blocked_apps = ["regedit*", "diskpart*", "cmd.exe", "powershell*"]
+# Nunca se lanzan, aunque esten instalados. No es solo el editor de registro
+# y la consola: cubre las herramientas de Windows que dan shell, tocan el
+# registro o programan tareas ("living-off-the-land binaries") — un STT
+# equivocado las nombra con la misma facilidad que una app instalada.
+blocked_apps = [
+    "regedit*", "diskpart*", "cmd.exe", "powershell*", "pwsh*",
+    "wt.exe", "wsl.exe", "wsl*.exe", "mmc.exe", "control.exe",
+    "certutil.exe", "bitsadmin.exe", "wscript.exe", "cscript.exe",
+    "mshta.exe", "rundll32.exe", "regsvr32.exe", "reg.exe", "sc.exe",
+    "schtasks.exe", "wmic.exe", "net.exe", "net1.exe", "taskkill.exe",
+]
 # Nunca se descargan. La red local ya esta bloqueada de fabrica.
 blocked_hosts = []
 
@@ -551,4 +560,14 @@ smalltalk_max_words = 12
 [privacy]
 local_only_audio = true      # bloquea la red durante STT/TTS
 log_transcripts  = true      # se guardan en vault/raw (tu disco)
+
+# Palabras o frases que NO deben quedar escritas: se tachan por
+# `[REDACTADO]` antes de ir al log (logs/friday.log) y antes de reenviarse
+# por `notify.mirror_say`. Coincidencia literal, sin distinguir mayusculas.
 redact_in_logs   = []
+
+# Apagado de fabrica. Si lo activas, `vault/` pasa a ser legible solo por tu
+# usuario de Windows (quita SYSTEM y Administradores via icacls). Es un
+# candado real, pero tambien es lo que un backup o un antivirus pueden
+# necesitar para tocar la carpeta — actívalo solo si sabes que no lo usas.
+restrict_vault_permissions = false

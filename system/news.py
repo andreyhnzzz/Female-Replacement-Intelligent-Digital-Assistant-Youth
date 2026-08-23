@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
@@ -135,7 +136,8 @@ class RssNewsReader:
     """Implementa `NewsPort`. Los feeds se piden en paralelo."""
 
     def __init__(self, policy: Policy, sources: list[dict[str, Any]] | None = None,
-                 timeout_s: float = 10.0, per_source: int = 8, contact: str = ""):
+                 timeout_s: float = 10.0, per_source: int = 8, contact: str = "",
+                 cache_ttl_s: float = 300.0):
         self.policy = policy
         self.sources = [s for s in (sources or list(DEFAULT_SOURCES))
                         if isinstance(s, dict) and s.get("url")]
@@ -143,6 +145,13 @@ class RssNewsReader:
         self.per_source = per_source
         self.ua = user_agent(contact)
         self.last_errors: list[str] = []
+        # Sin esto, dos «dame las noticias» seguidas en el mismo minuto
+        # redescargaban cada feed entero (hasta 2 MB por fuente). Un
+        # briefing y una pregunta directa piden lo mismo casi siempre, asi
+        # que 5 minutos por (tema, limite) evita la doble descarga sin
+        # notarse como noticias viejas.
+        self.cache_ttl_s = float(cache_ttl_s)
+        self._cache: dict[tuple[str, int], tuple[float, list[NewsItem]]] = {}
 
     def topics(self) -> list[str]:
         seen: list[str] = []
@@ -165,6 +174,11 @@ class RssNewsReader:
         return hit or self.sources
 
     async def headlines(self, topic: str = "", limit: int = 12) -> list[NewsItem]:
+        key = ((topic or "").strip().lower(), int(limit))
+        cached = self._cache.get(key)
+        if cached is not None and time.monotonic() - cached[0] < self.cache_ttl_s:
+            return list(cached[1])
+
         sources = self._selected(topic)
         self.last_errors = []
         if not sources:
@@ -211,7 +225,9 @@ class RssNewsReader:
             if keep:
                 clean.append(keep)
 
-        return self._interleave(clean, limit)
+        result = self._interleave(clean, limit)
+        self._cache[key] = (time.monotonic(), result)
+        return result
 
     @staticmethod
     def _interleave(batches: list[list[NewsItem]], limit: int) -> list[NewsItem]:

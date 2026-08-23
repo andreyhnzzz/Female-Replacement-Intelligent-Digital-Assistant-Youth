@@ -50,6 +50,22 @@ _HARD_DENY = (
 # Extensiones que nunca se ejecutan ni se renombran en masa.
 _DANGEROUS_EXT = {".sys", ".dll", ".drv", ".efi", ".msi", ".scr", ".cpl"}
 
+# Piso de `blocked_apps`: lo que se bloquea aunque el toml no diga nada.
+# `regedit`/`cmd`/`powershell` eran la lista entera y dejaban fuera al resto
+# de "living-off-the-land binaries" de Windows — herramientas legitimas del
+# sistema que dan shell, tocan el registro o programan tareas, y que un STT
+# equivocado puede nombrar tan facil como cualquier app instalada. No es
+# `_HARD_DENY` (eso no admite excepcion): esto es el DEFAULT de
+# `cfg.get(...)`, asi que un `blocked_apps = [...]` propio en el toml lo
+# sustituye entero si el usuario de verdad quiere permitir alguno.
+_BLOCKED_APPS_DEFAULT = (
+    "regedit*", "diskpart*", "cmd.exe", "powershell*", "pwsh*",
+    "wt.exe", "wsl.exe", "wsl*.exe", "mmc.exe", "control.exe",
+    "certutil.exe", "bitsadmin.exe", "wscript.exe", "cscript.exe",
+    "mshta.exe", "rundll32.exe", "regsvr32.exe", "reg.exe", "sc.exe",
+    "schtasks.exe", "wmic.exe", "net.exe", "net1.exe", "taskkill.exe",
+)
+
 # Lo que **corre codigo** al abrirlo. Ninguna de estas se abre por voz, ni
 # aunque la haya encontrado FRIDAY misma buscando en tu disco: es la lista
 # que separa «abre la factura» de ejecucion arbitraria. Ver `can_open`.
@@ -125,7 +141,8 @@ class Policy:
         self.allow_web = bool(cfg.get(f"{p}.allow_web", True))
         self.allow_web_fetch = bool(cfg.get(f"{p}.allow_web_fetch", True))
         self.confirm_over = int(cfg.get(f"{p}.confirm_over_files", 5))
-        self.blocked_apps = [a.lower() for a in cfg.get(f"{p}.blocked_apps", [])]
+        self.blocked_apps = [a.lower() for a in
+                            cfg.get(f"{p}.blocked_apps", list(_BLOCKED_APPS_DEFAULT))]
         self.blocked_hosts = [h.lower() for h in cfg.get(f"{p}.blocked_hosts", [])]
         self.control = {
             "media": bool(cfg.get(f"{p}.allow_media", True)),

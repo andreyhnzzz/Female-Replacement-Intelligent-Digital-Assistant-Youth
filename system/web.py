@@ -17,6 +17,7 @@ import webbrowser
 from urllib.parse import quote_plus
 
 from core.policy import Policy
+from core.proc import NO_WINDOW
 from system.ports import DefaultApps
 
 ENGINES: dict[str, str] = {
@@ -138,7 +139,8 @@ class BrowserWebOpener:
             try:
                 subprocess.Popen([app.path, url], shell=False,
                                  stdout=subprocess.DEVNULL,
-                                 stderr=subprocess.DEVNULL)
+                                 stderr=subprocess.DEVNULL,
+                                 creationflags=NO_WINDOW)
                 return True
             except OSError as exc:
                 self.last_error = str(exc)[:140]   # y se cae al plan B

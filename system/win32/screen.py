@@ -16,6 +16,7 @@ import shutil
 import subprocess
 from typing import TYPE_CHECKING
 
+from core.proc import NO_WINDOW
 from system.ports import ScreenContext
 
 if TYPE_CHECKING:
@@ -85,24 +86,31 @@ class WindowsScreenReader:
     def _ocr(self) -> str:
         if not self._tesseract:
             return ""
+        tmp = None
         try:
-            import mss
             import tempfile
             from pathlib import Path
+
+            import mss
+            import mss.tools
 
             with mss.mss() as sct:
                 shot = sct.grab(sct.monitors[1])
                 tmp = Path(tempfile.gettempdir()) / "friday_screen.png"
-                import mss.tools
                 mss.tools.to_png(shot.rgb, shot.size, output=str(tmp))
 
             proc = subprocess.run(
                 [self._tesseract, str(tmp), "stdout", "-l", "spa+eng"],
-                capture_output=True, timeout=25)
-            tmp.unlink(missing_ok=True)
+                capture_output=True, timeout=25, creationflags=NO_WINDOW)
             return proc.stdout.decode("utf-8", "replace")[: self.max_chars]
         except Exception:
             return ""
+        finally:
+            # Un timeout o un tesseract que revienta dejaba la captura
+            # huerfana en el temp: no es basura cualquiera, es un pantallazo
+            # del usuario. `finally` la borra pase lo que pase arriba.
+            if tmp is not None:
+                tmp.unlink(missing_ok=True)
 
     # ── puerto ────────────────────────────────────────────────────
     def context(self, with_text: bool = True) -> ScreenContext:

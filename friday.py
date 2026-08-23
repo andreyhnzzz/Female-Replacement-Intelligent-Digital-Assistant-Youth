@@ -27,6 +27,7 @@ import argparse
 import asyncio
 import re
 import sys
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
@@ -71,6 +72,8 @@ class Friday:
             wiki=self.cfg.get("vault.wiki", "wiki"),
             outputs=self.cfg.get("vault.outputs", "outputs"),
             daily_format=self.cfg.get("vault.daily_format", "%Y-%m-%d"),
+            restrict_permissions=bool(
+                self.cfg.get("privacy.restrict_vault_permissions", False)),
         )
         self.graph = Graph(self.vault, ttl_s=float(self.cfg.get("vault.index_ttl_s", 3)))
         self.engine = build_engine(self.cfg)
@@ -100,8 +103,14 @@ class Friday:
         self._fondo: set[asyncio.Task] = set()
         # Lo que el reloj ya disparo hoy. Se siembra leyendo la nota diaria
         # al arrancar, asi que reiniciar a media mañana no repite el
-        # recordatorio de las nueve.
-        self._disparados: set[str] = set()
+        # recordatorio de las nueve. Una clave vieja no vuelve a coincidir
+        # nunca —`due()` compara contra el instante actual, y un job
+        # recurrente genera una clave nueva la siguiente vez—, asi que un
+        # `OrderedDict` con techo es exactamente lo mismo que un `set` para
+        # `due()` y no crece sin fin en una sesion de semanas (regla del
+        # cache del vault, aplicada aqui).
+        self._disparados: "OrderedDict[str, None]" = OrderedDict()
+        self._disparados_max = 500
         self.loop: asyncio.AbstractEventLoop | None = None
 
     # ══════════════════════════════════════════ peticiones
@@ -195,9 +204,15 @@ class Friday:
         # esperando por algo que ya no le importa a nadie.
         if (not ev.data.get("ya_avisado")
                 and bool(self.cfg.get("notify.mirror_say", True))):
+            # Lo que se reenvia a un servicio de terceros pasa por el mismo
+            # tachado que la bitacora: mirror_say manda resumenes del
+            # taller, que pueden llevar fragmentos de codigo o rutas de
+            # proyecto (regla de `can_notify`: la direccion del flujo es lo
+            # que importa, y esto sale).
+            patrones = list(self.cfg.get("privacy.redact_in_logs", []) or [])
             await self._avisar(Notice(
                 title=str(ev.data.get("skill", "F.R.I.D.A.Y")),
-                body=text, tag="fondo"))
+                body=privacy.redact(text, patrones), tag="fondo"))
 
     # ══════════════════════════════════════════ voz
     def _on_utterance(self, audio, duration: float) -> None:
@@ -351,12 +366,19 @@ class Friday:
                 # que un tick —un briefing con el motor lento tarda— el tick
                 # siguiente volveria a encontrarlo vencido y lo lanzaria
                 # otra vez.
-                self._disparados.add(disparo.clave)
+                self._marcar_disparo(disparo.clave)
                 try:
                     await self._disparar(disparo)
                 except Exception as exc:
                     self.bus.report(f"disparo «{disparo.titulo}» fallo: {exc}",
                                     origen="reloj")
+
+    def _marcar_disparo(self, clave: str) -> None:
+        """Registra una clave como ya disparada, con techo (ver `_disparados`)."""
+        self._disparados[clave] = None
+        self._disparados.move_to_end(clave)
+        while len(self._disparados) > self._disparados_max:
+            self._disparados.popitem(last=False)
 
     async def _disparar(self, disparo) -> None:
         """Un disparo, ya decidido. Recordatorio se dice; trabajo se enruta."""
@@ -409,7 +431,7 @@ class Friday:
         except Exception:
             return
         for m in re.finditer(r"\[reloj:([^\]]+)\]", cuerpo):
-            self._disparados.add(m.group(1))
+            self._marcar_disparo(m.group(1))
 
     async def _avisar(self, notice: Notice) -> None:
         """Manda un aviso fuera del equipo, si hay a donde y esta permitido."""
@@ -486,8 +508,10 @@ class Friday:
 
         # Bitacora: sin esto, cuando algo no arranca no hay forma de saber
         # si fallo el modelo, el hotkey o el microfono.
-        self.logbook = Logbook(self.bus, self.cfg.root / "logs" / "friday.log",
-                               echo=bool(self.args.console or self.args.verbose))
+        self.logbook = Logbook(
+            self.bus, self.cfg.root / "logs" / "friday.log",
+            echo=bool(self.args.console or self.args.verbose),
+            redact_patterns=list(self.cfg.get("privacy.redact_in_logs", []) or []))
         # Lo que revienta DENTRO de un handler no puede volver por el bus sin
         # arriesgar un bucle, asi que el bus escribe directo en la bitacora.
         # Antes iba a `print`, y bajo `pythonw` eso no llega a ningun sitio.
