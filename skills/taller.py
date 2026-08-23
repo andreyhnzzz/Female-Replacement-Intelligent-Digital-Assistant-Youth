@@ -21,13 +21,15 @@ repo y el conmutador le da el que haya.
 from __future__ import annotations
 
 import asyncio
+import itertools
 import re
 import subprocess
 import time
-import unicodedata
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from core.bus import BUS
+from core.lang import parecido, slug_words
 from core.proc import NO_WINDOW
 
 from .base import PendingAction, Skill, SkillContext, SkillResult
@@ -74,12 +76,61 @@ _LIMPIA = re.compile(
     r"que\s+|a\s+ver\s+si\s+)+", re.I)
 
 
-def _fold(s: str) -> str:
-    """`mi-proyecto`, `mi_proyecto` y «mi proyecto» son lo mismo dicho de tres
-    maneras, y el STT siempre entrega la tercera."""
-    s = unicodedata.normalize("NFKD", s)
-    s = "".join(c for c in s if not unicodedata.combining(c))
-    return re.sub(r"[^a-z0-9]+", " ", s.lower()).strip()
+# `mi-proyecto`, `mi_proyecto` y «mi proyecto» son lo mismo dicho de tres
+# maneras, y el STT siempre entrega la tercera. La funcion vive ahora en
+# `core/lang.py`, con las demas normalizaciones del habla; el alias se
+# mantiene porque este archivo la nombra en media docena de sitios.
+_fold = slug_words
+
+# Cuanto tiene que parecerse un nombre dictado al de una carpeta para que
+# FRIDAY se atreva a PREGUNTAR por ella. No para elegirla: para preguntar.
+# Por debajo de esto, «metete en la casa» se ofreceria como «mi-caza» y
+# proponer basura es peor que decir que no reconoces el proyecto.
+PARECIDO_MINIMO = 0.72
+
+# Como se pregunta por un encargo en marcha, y como se cancela.
+ESTADO = re.compile(
+    r"\b(c[oó]mo va|qu[eé] tal va|va (bien|eso)|c[oó]mo van|"
+    r"sigues? con|est[aá]s? (con|en) (eso|ello)|"
+    r"(que|qu[eé]) (encargos?|tareas?) (tienes|hay)|encargos? en (marcha|curso))\b",
+    re.I)
+
+CANCELAR = re.compile(
+    r"\b(cancela|cancelar|para|detente|d[eé]jalo|d[eé]jalo ya|olv[ií]dalo|"
+    r"aborta|abortar|anula|ya no|para ya)\b", re.I)
+
+
+@dataclass
+class Encargo:
+    """Un trabajo en marcha. Existe para poder contestar «¿como va?».
+
+    Antes el taller solo guardaba un `set` de tareas de asyncio: bastaba
+    para que el recolector no se las llevara, y no para nada mas. Preguntar
+    por un encargo, o pararlo, no tenia respuesta posible — el dato no
+    estaba. Lanzar trabajo que dura minutos y no poder mirarlo es media
+    capacidad.
+    """
+    ident: str
+    proyecto: str
+    ruta: Path
+    tarea: str
+    escribe: bool
+    t0: float = field(default_factory=time.time)
+    task: "asyncio.Task | None" = None
+    estado: str = "corriendo"          # corriendo | hecho | fallido | cancelado
+
+    @property
+    def segundos(self) -> int:
+        return int(time.time() - self.t0)
+
+    @property
+    def vivo(self) -> bool:
+        return self.estado == "corriendo"
+
+    def describe(self) -> str:
+        minutos = self.segundos // 60
+        cuanto = f"{minutos} min" if minutos else f"{self.segundos}s"
+        return f"{self.proyecto}: {self.tarea} ({cuanto})"
 
 
 # Herramientas que no son «leer y escribir archivos»: ejecutan comandos o
@@ -120,10 +171,15 @@ class TallerSkill(Skill):
         r"\bm[eé]tete en\b", r"\bentra (en|al)\b",
         r"\ben (el |mi )?(proyecto|repo|repositorio)\b",
         r"\bfallan los tests?\b", r"\blos tests?\b", r"\btaller\b",
-        r"\bencarga(le)?\b", r"\bpon(te)? a trabajar\b",
+        r"\bencarga(le)?\b", r"\bencargos?\b", r"\bpon(te)? a trabajar\b",
         r"\brevisa (el|los) (c[oó]digo|repo|tests?)\b",
+        # Preguntar por lo que ya esta corriendo. «como va» a secas se queda
+        # fuera a proposito: es demasiado corto y comun, y se lo robaria a
+        # media casa. «como va lo de» ya nombra un encargo.
+        r"\bc[oó]mo va lo de\b", r"\bencargos? en (marcha|curso)\b",
     ]
     needs = ()
+    riesgo = "efecto"        # suelta un agente dentro de un repo
 
     def __init__(self, ctx_cfg) -> None:
         super().__init__(ctx_cfg)
@@ -134,17 +190,120 @@ class TallerSkill(Skill):
             "read_tools", ["Read", "Glob", "Grep"]))
         self.write_tools = list(self.opts.get(
             "write_tools", ["Read", "Glob", "Grep", "Write", "Edit"]))
-        # Referencias vivas: sin esto el recolector se lleva una tarea a
-        # medio correr.
-        self._jobs: set[asyncio.Task] = set()
+        # Los encargos en marcha, por identificador. Sostiene las
+        # referencias vivas —sin esto el recolector se lleva una tarea a
+        # medio correr— y ademas es lo que permite responder «como va».
+        self._encargos: dict[str, Encargo] = {}
+        self._contador = itertools.count(1)
         # Un encargo tarda minutos. Sin tope, tres frases seguidas levantan
         # tres agentes a la vez sobre el mismo disco.
         self.max_jobs = max(1, int(self.opts.get("max_jobs", 2)))
+
+    # ══════════════════════════════════════════════ el registro
+    def vivos(self) -> list[Encargo]:
+        return [e for e in self._encargos.values() if e.vivo]
+
+    def _recorta(self, tope: int = 12) -> None:
+        """Deja de recordar los encargos terminados mas viejos.
+
+        Un proceso que corre todo el dia no puede crecer sin fin — la misma
+        razon por la que el cache de notas lleva techo. Los vivos no se
+        tocan nunca: un encargo en marcha no se olvida por antiguo.
+        """
+        acabados = [e for e in self._encargos.values() if not e.vivo]
+        for viejo in sorted(acabados, key=lambda e: e.t0)[:-tope or None]:
+            self._encargos.pop(viejo.ident, None)
+
+    def _estado_md(self) -> SkillResult:
+        """«¿Como va lo de mi-proyecto?» — lo que faltaba para poder mirar."""
+        vivos = self.vivos()
+        acabados = [e for e in self._encargos.values() if not e.vivo][-4:]
+
+        if not vivos and not acabados:
+            return SkillResult(speak="No tengo ningun encargo en marcha.",
+                               display="# Taller vacio\n\nNada corriendo.",
+                               data={"jobs": 0})
+
+        lineas = ["# Taller", ""]
+        if vivos:
+            lineas.append(f"### En marcha ({len(vivos)})")
+            lineas += [f"- `{e.ident}` **{e.proyecto}** — {e.tarea} "
+                       f"_({e.segundos // 60} min)_" for e in vivos]
+            lineas.append("")
+        if acabados:
+            lineas.append("### Ultimos")
+            lineas += [f"- `{e.ident}` **{e.proyecto}** — {e.estado}"
+                       for e in acabados]
+
+        if vivos:
+            uno = vivos[0]
+            minutos = uno.segundos // 60
+            hablado = (f"Sigo con lo de {uno.proyecto}"
+                       + (f", llevo {minutos} minutos." if minutos
+                          else ", acabo de empezar."))
+            if len(vivos) > 1:
+                hablado += f" Y {len(vivos) - 1} mas."
+        else:
+            ultimo = acabados[-1]
+            hablado = f"Nada en marcha. Lo ultimo fue {ultimo.proyecto}: {ultimo.estado}."
+
+        return SkillResult(speak=hablado, display="\n".join(lineas),
+                           data={"jobs": len(vivos),
+                                 "encargos": [e.describe() for e in vivos]})
+
+    def _cancelar(self, text: str) -> SkillResult:
+        """Parar un encargo. Si hay varios y no dijo cual, pregunta.
+
+        Cancelar no se confirma: es la operacion que **deshace**, y pedir un
+        «si» para dejar de hacer algo es exactamente al reves que el resto de
+        la politica. Lo que si hace falta es no cancelar el que no era, y por
+        eso con dos en marcha y sin nombre no se elige por antiguedad.
+        """
+        vivos = self.vivos()
+        if not vivos:
+            return SkillResult(speak="No tengo nada en marcha que parar.",
+                               display="# Nada que cancelar")
+
+        blob = _fold(text)
+        nombrados = [e for e in vivos
+                     if re.search(rf"(?<![a-z0-9]){re.escape(_fold(e.proyecto))}"
+                                  rf"(?![a-z0-9])", blob)]
+        objetivo: Encargo | None = None
+        if len(nombrados) == 1:
+            objetivo = nombrados[0]
+        elif not nombrados and len(vivos) == 1:
+            objetivo = vivos[0]
+
+        if objetivo is None:
+            listado = "\n".join(f"- `{e.ident}` {e.describe()}" for e in vivos)
+            return SkillResult(
+                ok=False, error="cual encargo",
+                speak=f"Tengo {len(vivos)} en marcha. ¿Cual paro?",
+                display=f"# ¿Cual paro?\n\n{listado}",
+                data={"encargos": [e.ident for e in vivos]})
+
+        objetivo.estado = "cancelado"
+        if objetivo.task is not None:
+            objetivo.task.cancel()
+        return SkillResult(
+            speak=f"Listo, dejo lo de {objetivo.proyecto}.",
+            display=f"# Cancelado\n\n**{objetivo.proyecto}** — ~~{objetivo.tarea}~~\n\n"
+                    f"_Llevaba {objetivo.segundos // 60} min._",
+            data={"cancelado": objetivo.ident, "project": objetivo.proyecto})
 
     # ══════════════════════════════════════════════ ejecucion
     async def run(self, ctx: SkillContext) -> SkillResult:
         text = ctx.text.strip()
         policy = ctx.policy
+
+        # Preguntar por un encargo y pararlo van ANTES de todo lo demas: no
+        # necesitan politica, ni motor, ni recorrer el disco, y «déjalo» con
+        # un agente corriendo no puede acabar interpretandose como el
+        # encargo de dejar algo en algun proyecto.
+        if CANCELAR.search(text) and self.vivos():
+            return self._cancelar(text)
+        if ESTADO.search(text):
+            return self._estado_md()
 
         if policy is None:
             return SkillResult(ok=False, error="sin politica",
@@ -178,6 +337,22 @@ class TallerSkill(Skill):
         elegido = self._elegir(text, proyectos)
         if elegido is None:
             listado = "\n".join(f"- **{n}** — `{p}`" for n, p in proyectos[:12])
+            # Un nombre dictado rara vez llega igual que en el disco:
+            # «api-clientes» sale como «api clientes» y «FRIDAY» como
+            # «friday». El emparejado exacto ya cubre esos dos por folding,
+            # pero no cubre que el STT se coma una silaba. Ahi se **ofrece**
+            # el parecido, nunca se elige: preguntar cuesta una frase.
+            cerca = self._sugerir(text, proyectos)
+            if cerca:
+                sugerido = ", ".join(f"**{n}**" for n in cerca[:3])
+                return SkillResult(
+                    ok=False, error="proyecto no reconocido",
+                    speak=f"No estoy segura. ¿Te refieres a {cerca[0]}?",
+                    display=f"# ¿Te refieres a...?\n\nNo encontre ese nombre "
+                            f"exacto. Lo que mas se le parece: {sugerido}.\n\n"
+                            f"### Los que puedo tocar\n{listado}",
+                    data={"projects": [n for n, _ in proyectos],
+                          "sugerencias": cerca})
             return SkillResult(
                 ok=False, error="proyecto no reconocido",
                 speak="No reconozco ese proyecto. Dime cual de los que tengo.",
@@ -193,14 +368,16 @@ class TallerSkill(Skill):
                 display=f"# {nombre}\n\n`{ruta}`\n\nDime que quieres que haga ahi.",
                 data={"project": nombre, "path": str(ruta)})
 
-        if len(self._jobs) >= self.max_jobs:
+        vivos = self.vivos()
+        if len(vivos) >= self.max_jobs:
             return SkillResult(
                 ok=False, error="taller ocupado",
-                speak=f"Ya tengo {len(self._jobs)} encargos en marcha. "
-                      f"Espera a que acabe alguno.",
-                display=f"# Taller ocupado\n\n{len(self._jobs)} encargos "
-                        f"corriendo (tope: {self.max_jobs}).",
-                data={"jobs": len(self._jobs), "max_jobs": self.max_jobs})
+                speak=f"Ya tengo {len(vivos)} encargos en marcha. "
+                      f"Espera a que acabe alguno, o dime que lo deje.",
+                display=f"# Taller ocupado\n\n{len(vivos)} encargos "
+                        f"corriendo (tope: {self.max_jobs}).\n\n"
+                        + "\n".join(f"- `{e.ident}` {e.describe()}" for e in vivos),
+                data={"jobs": len(vivos), "max_jobs": self.max_jobs})
 
         escribe = self._escribe(tarea)
         decision = policy.can_delegate(ruta, writes=escribe)
@@ -252,10 +429,16 @@ class TallerSkill(Skill):
                 tarea: str, escribe: bool) -> SkillResult:
         """Arranca el trabajo y devuelve el turno. Lo que sale de aqui es un
         acuse de recibo; el resultado llega por el bus al terminar."""
-        job = asyncio.create_task(
-            self._trabajar(ctx, nombre, ruta, tarea, escribe))
-        self._jobs.add(job)
-        job.add_done_callback(self._jobs.discard)
+        encargo = Encargo(ident=f"e{next(self._contador)}", proyecto=nombre,
+                          ruta=ruta, tarea=tarea, escribe=escribe)
+        self._encargos[encargo.ident] = encargo
+        encargo.task = asyncio.create_task(
+            self._trabajar(ctx, encargo))
+        # El encargo NO se borra del registro al terminar: se queda con su
+        # estado. Preguntar «como fue lo de X» treinta segundos despues de
+        # que acabara tiene que poder contestarse, y un dict que se vacia al
+        # acabar contesta «no habia nada» a algo que si paso.
+        encargo.task.add_done_callback(lambda _t: self._recorta())
 
         tools, retiradas = self._tools(escribe, ctx.policy)
         nota = (f"\n\n> Retiradas por politica: `{', '.join(retiradas)}`"
@@ -272,11 +455,12 @@ class TallerSkill(Skill):
                   "task": tarea, "writes": escribe, "async": True,
                   "tools": tools, "tools_retiradas": retiradas})
 
-    async def _trabajar(self, ctx: SkillContext, nombre: str, ruta: Path,
-                        tarea: str, escribe: bool) -> None:
-        t0 = time.time()
+    async def _trabajar(self, ctx: SkillContext, encargo: Encargo) -> None:
+        nombre, ruta = encargo.proyecto, encargo.ruta
+        tarea, escribe = encargo.tarea, encargo.escribe
+        t0 = encargo.t0
         await BUS.emit("agent.started", project=nombre, path=str(ruta),
-                       task=tarea, writes=escribe)
+                       task=tarea, writes=escribe, ident=encargo.ident)
 
         prompt = (
             f"Estas trabajando en el proyecto «{nombre}», en {ruta}.\n\n"
@@ -305,9 +489,18 @@ class TallerSkill(Skill):
             else:
                 salida = await engine.complete(prompt, system=system,
                                                agentic=True, **kw)
+        except asyncio.CancelledError:
+            # Lo paro el usuario. No se avisa por `core.say`: acaba de
+            # decirlo el, y repetirselo es ruido. El acuse ya se lo dio la
+            # rama que cancela.
+            encargo.estado = "cancelado"
+            await BUS.emit("agent.cancelled", project=nombre, task=tarea,
+                           ident=encargo.ident)
+            raise
         except Exception as exc:
+            encargo.estado = "fallido"
             await BUS.emit("agent.failed", project=nombre, task=tarea,
-                           error=str(exc)[:300])
+                           error=str(exc)[:300], ident=encargo.ident)
             await BUS.emit("core.say",
                            text=f"El encargo en {nombre} fallo. {str(exc)[:120]}",
                            display=f"# Encargo fallido\n\n**{nombre}** · {tarea}\n\n"
@@ -316,9 +509,10 @@ class TallerSkill(Skill):
             return
 
         ms = int((time.time() - t0) * 1000)
+        encargo.estado = "hecho"
         resumen = self._resumen(salida)
         await BUS.emit("agent.done", project=nombre, task=tarea, ms=ms,
-                       chars=len(salida))
+                       chars=len(salida), ident=encargo.ident)
         await BUS.emit(
             "core.say",
             text=f"Listo lo de {nombre}. {resumen}",
@@ -403,6 +597,30 @@ class TallerSkill(Skill):
                 candidatos.append((nombre, ruta))
 
         return candidatos[0] if len(candidatos) == 1 else None
+
+    @staticmethod
+    def _sugerir(text: str, proyectos: list[tuple[str, Path]]) -> list[str]:
+        """Nombres que se parecen a alguna palabra de la frase.
+
+        **Solo para preguntar.** Un parecido de 0.8 entre lo que oyo el STT y
+        una carpeta es una buena pista y una pesima decision: la diferencia
+        entre `friday` y `friday-docs` tambien es alta, y elegir mal cuesta
+        que un agente escriba en el repo equivocado. Por eso esto devuelve
+        una lista para leerla en voz alta, y no una ruta para trabajar.
+        """
+        palabras = [w for w in _fold(text).split() if len(w) >= 4]
+        if not palabras:
+            return []
+        puntuados: list[tuple[float, str]] = []
+        for nombre, _ruta in proyectos:
+            clave = _fold(nombre)
+            if len(clave) < 3:
+                continue
+            mejor = max((parecido(w, clave) for w in palabras), default=0.0)
+            if mejor >= PARECIDO_MINIMO:
+                puntuados.append((mejor, nombre))
+        puntuados.sort(reverse=True)
+        return [n for _s, n in puntuados]
 
     @staticmethod
     def _tarea(text: str, nombre: str) -> str:
