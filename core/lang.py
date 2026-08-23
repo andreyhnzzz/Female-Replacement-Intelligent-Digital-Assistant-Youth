@@ -17,6 +17,21 @@ import difflib
 import re
 import unicodedata
 
+# ══════════════════════════════════════════════ el imperativo español
+# En español el pronombre se pega al imperativo: «abrelo», «guardamelo»,
+# «ciérralas». Y `\babre\b` **no casa con «abrelo»** — la frontera de palabra
+# exige un no-alfanumerico detras, y ahi hay una «l».
+#
+# Es una constante y no un comentario en cada regex porque el fallo aparecio
+# en tres sitios a la vez —el `ACTION` del router, los disparadores de
+# `sistema` y su `OPEN`— y en los tres el sintoma era distinto: «abrelo» no
+# contaba como orden, no enrutaba a ninguna skill, y no entraba en la rama de
+# abrir. Un rasgo del idioma se escribe una vez.
+#
+#     re.compile(rf"\b(abre|cierra){ENCLITICO}\b", re.I)
+ENCLITICO = r"(?:me|te|se|lo|la|le|los|las|nos)*"
+
+
 # ══════════════════════════════════════════════ formas de la misma palabra
 def fold(text: str) -> str:
     """Minusculas sin acentos. La puntuacion se queda.

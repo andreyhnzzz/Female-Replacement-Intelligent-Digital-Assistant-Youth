@@ -8,11 +8,20 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from core.lang import ENCLITICO
+
 from .base import Skill, SkillContext, SkillResult
 
+# El pronombre pegado importa aqui mas que en ningun sitio: «abrelo» es la
+# forma natural de pedir que se abra lo que se acaba de encontrar, y sin
+# `ENCLITICO` no entraba en esta rama (ver `core/lang.py`).
+#
+# Y con el pronombre pegado el imperativo **lleva tilde** —«ábrelo»,
+# «lánzalo», «ejecútalo»—, que es justo lo que transcribe el STT. Sin las
+# clases de acento, la mitad de las formas naturales seguian sin casar.
 OPEN = re.compile(
-    r"\b(abre|abrir|abreme|lanza|lanzar|ejecuta|ejecutar|inicia|iniciar|"
-    r"arranca|corre|pon|ponme)\b", re.I)
+    r"\b([aá]bre|abrir|l[aá]nza|lanzar|ejec[uú]ta|ejecutar|inicia|iniciar|"
+    r"arranca|corre|pon)" + ENCLITICO + r"\b", re.I)
 FOCUS = re.compile(r"\b(enfoca|enf[oó]came|cambia a|ve a|tr[aá]eme|muestra|pasa a)\b", re.I)
 SEARCH = re.compile(r"\b(busca|b[uú]scame|buscar|investiga|google[a]?|averigua)\b", re.I)
 LIST = re.compile(r"\b(qu[eé] tengo abierto|ventanas|qu[eé] hay abierto|"
@@ -30,10 +39,15 @@ class SistemaSkill(Skill):
     name = "sistema"
     description = "Abre aplicaciones, cambia de ventana y busca en la web."
     triggers = [
-        r"\babre\b", r"\babrir\b", r"\blanza\b", r"\bejecuta\b", r"\binicia\b",
+        # Con enclitico y con tilde: «abrelo» y «ábrelo» tienen que llegar
+        # aqui igual que «abre». Es como se pide abrir lo que se acaba de
+        # encontrar, y era la forma que no enrutaba a ninguna parte.
+        r"\b[aá]bre" + ENCLITICO + r"\b", r"\babrir\b",
+        r"\bl[aá]nza" + ENCLITICO + r"\b", r"\bejec[uú]ta" + ENCLITICO + r"\b",
+        r"\binicia" + ENCLITICO + r"\b",
         r"\barranca\b", r"\benfoca\b", r"\bcambia a\b", r"\bventanas\b",
         r"\bqu[eé] tengo abierto\b", r"\bbusca en\b", r"\bgooglea\b",
-        r"\bab[rí]eme\b", r"\bprogramas abiertos\b",
+        r"\bprogramas abiertos\b",
         # «busca gatos en google» tiene el motor al final, no pegado al verbo.
         # Sin este patron el `\bbusca\b` suelto de `vault` se lo lleva y la
         # peticion acaba buscando gatos en tus notas.
@@ -42,6 +56,10 @@ class SistemaSkill(Skill):
     ]
     needs = ("apps", "launcher")
     riesgo = "efecto"        # lanza aplicaciones y enfoca ventanas
+    # «Busca el informe y abrelo»: la primera mitad resuelve una ruta y esta
+    # skill la abre. Sin declararlo, el router no encadena — y hace bien,
+    # porque «abrelo» a secas es una frase sin objeto.
+    acepta = ("archivo", "carpeta")
 
     async def run(self, ctx: SkillContext) -> SkillResult:
         text = ctx.text.strip()
@@ -50,6 +68,14 @@ class SistemaSkill(Skill):
         if sys_ is None:
             return SkillResult(ok=False, error="sin acceso al sistema",
                                speak="No tengo acceso al sistema en esta plataforma.")
+
+        # Turno encadenado: la mitad anterior ya resolvio QUE abrir, asi que
+        # no hay nada que interpretar en «abrelo». Va antes de todas las
+        # ramas: con un objeto concreto en la mano, releer la frase solo
+        # puede empeorar la decision.
+        entregado = ctx.slots.get("entrega")
+        if entregado is not None and OPEN.search(text):
+            return self._open_entregado(ctx, entregado)
 
         if LIST.search(text):
             return self._list_windows(ctx)
@@ -80,6 +106,34 @@ class SistemaSkill(Skill):
                      "enfocar ni que buscar.\n\nPrueba con **«abre X»**, "
                      "**«cambia a X»** o **«busca X en google»**."),
             data={"texto": text[:120], "motivo": "sin verbo de accion"})
+
+    # ── abrir lo que otra skill resolvio ──────────────────────────
+    def _open_entregado(self, ctx: SkillContext, entrega) -> SkillResult:
+        """Abre un archivo o carpeta que llego resuelto de la mitad anterior.
+
+        No pasa por `apps.find`: no se busca una aplicacion que se llame como
+        el archivo, se le da la ruta al shell y que abra lo que el usuario
+        tenga asociado. Y va por `can_open`, no por `can_launch` — la ruta
+        salio de rastrear el disco, y ahi aparece cualquier cosa.
+        """
+        sys_ = ctx.system
+        if sys_.launcher is None:
+            return SkillResult(ok=False, error="sin lanzador",
+                               speak="No puedo abrir archivos aqui.")
+
+        ruta = Path(entrega.valor)
+        if not sys_.launcher.open_path(ruta):
+            razon = getattr(sys_.launcher, "last_error", "") or "bloqueado por politica"
+            return SkillResult(
+                ok=False, error=razon,
+                speak=f"No pude abrir {entrega.etiqueta or ruta.name}. {razon}.",
+                display=f"# No lo abri\n\n**{ruta.name}**\n\n> {razon}",
+                data={"path": str(ruta), "motivo": razon})
+
+        return SkillResult(
+            speak=f"Abierto {entrega.etiqueta or ruta.name}.",
+            display=f"# Abierto\n\n**{ruta.name}**\n\n`{ruta.parent}`",
+            data={"action": "open_path", "path": str(ruta)})
 
     # ── abrir aplicacion ──────────────────────────────────────────
     def _open(self, ctx: SkillContext, text: str) -> SkillResult:

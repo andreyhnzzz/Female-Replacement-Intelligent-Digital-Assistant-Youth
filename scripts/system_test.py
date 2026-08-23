@@ -1289,6 +1289,119 @@ async def main() -> int:
                                [("mi-proyecto", sandbox)]) == [],
           "proponer basura es peor que decir que no lo reconoces")
 
+    # ══════════════════ UNA FRASE, DOS CAPACIDADES ════════════════
+    print()
+    print("  -- «busca el archivo informe y abrelo» --")
+    from core.router import ACTION
+    from skills.sistema import OPEN
+
+    # El fallo de raiz: en español el pronombre se pega al imperativo, y con
+    # el pronombre pegado el verbo lleva tilde. `\babre\b` no casa con
+    # ninguna de las dos formas, que son las que de verdad dicta la gente.
+    check("«abrelo» y «ábrelo» son ordenes, no continuacion de la charla",
+          bool(ACTION.search("abrelo")) and bool(ACTION.search("ábrelo")),
+          "sin esto se tomaban por conversacion y no abrian nada")
+    check("y llegan a la rama de abrir",
+          bool(OPEN.search("ábrelo")) and bool(OPEN.search("abrelo")))
+    check("pero un gerundio no es una orden", not ACTION.search("abriendo"),
+          "el enclitico no puede convertirse en comodin")
+
+    partir = Router._partir
+    check("una frase con dos peticiones se parte",
+          partir("busca el archivo informe y abrelo")
+          == ("busca el archivo informe", "abrelo"))
+    check("se corta por el ULTIMO conector que valga",
+          partir("busca el archivo de ventas y marketing y abrelo")
+          == ("busca el archivo de ventas y marketing", "abrelo"),
+          "el primer «y» estaba dentro del nombre")
+    check("dos cosas buscadas NO son dos peticiones",
+          partir("busca el archivo informe y el contrato") == ("", ""),
+          "sin verbo detras del conector, no se parte")
+    check("una orden simple se queda entera",
+          partir("abre spotify") == ("", ""))
+    check("y encadenar tiene tope de dos",
+          partir("abrelo") == ("", ""),
+          "esto no es un planificador y no debe parecerlo")
+
+    # ── la cadena de verdad, con un lanzador espia ──
+    cadena_caja = Path(tempfile.mkdtemp(prefix="friday_cadena_"))
+    (cadena_caja / "informe anual.pdf").write_text("x", encoding="utf-8")
+    (cadena_caja / "instalador nitro.exe").write_text("x", encoding="utf-8")
+
+    pol_cadena = Policy(FakeCfg(cadena_caja))
+
+    class LanzadorEspia:
+        def __init__(self, policy):
+            self.policy = policy
+            self.abiertos: list[str] = []
+            self.last_error = ""
+
+        def launch(self, app, args=None):
+            return True
+
+        def open_path(self, ruta):
+            decision = self.policy.can_open(Path(ruta))
+            if not decision.allowed:
+                self.last_error = decision.reason
+                return False
+            self.last_error = ""
+            self.abiertos.append(Path(ruta).name)
+            return True
+
+    espia_cadena = LanzadorEspia(pol_cadena)
+    acceso_cadena = SystemAccess(files=LocalFileIndex(pol_cadena),
+                                 launcher=espia_cadena)
+    router_cadena = Router(real_cfg, vault, graph, FakeEngine(real_cfg), skills,
+                           system=acceso_cadena, policy=pol_cadena)
+
+    async def _turno(frase):
+        espia_cadena.abiertos.clear()
+        ruta = await router_cadena.decide(frase)
+        _r, res = await router_cadena.dispatch(frase, ruta)
+        router_cadena.pending = None
+        return res
+
+    res_cad = await _turno("busca el archivo informe y abrelo")
+    check("la primera mitad encuentra y la segunda abre",
+          espia_cadena.abiertos == ["informe anual.pdf"],
+          str(espia_cadena.abiertos))
+    check("y se cuenta lo que se hizo, entero",
+          "Abierto" in res_cad.speak and "coincidencias" in res_cad.speak,
+          res_cad.speak)
+
+    res_exe = await _turno("busca el archivo instalador y abrelo")
+    check("un ejecutable encontrado por voz NO se abre",
+          espia_cadena.abiertos == [],
+          "abrirlo seria ejecucion arbitraria esquivando allow_shell")
+    check("y se dice por que", "No pude abrir" in res_exe.speak, res_exe.speak)
+
+    res_no = await _turno("busca el archivo zzzz y abrelo")
+    check("sin resultado en la primera, no hay segunda",
+          espia_cadena.abiertos == [],
+          "abrir el resultado de una busqueda vacia es abrir cualquier cosa")
+
+    res_aj = await _turno("busca el archivo informe y silencia el volumen")
+    check("si la segunda no sabe consumir lo entregado, no corre",
+          espia_cadena.abiertos == []
+          and res_aj.data.get("cadena", {}).get("hecho") is False,
+          str(res_aj.data.get("cadena")))
+    check("pero la primera mitad si se hizo, y se dice",
+          "Hice lo primero" in res_aj.display,
+          "media tarea anunciada entera es peor que media tarea")
+
+    check("abrir un archivo no es lanzar una app del catalogo",
+          pol_cadena.can_open(cadena_caja / "x.exe").verdict is Verdict.DENY
+          and pol_cadena.can_open(cadena_caja / "informe anual.pdf").verdict
+          is Verdict.ALLOW,
+          "can_launch recibe algo curado; can_open, lo que haya en tu disco")
+    check("y un acceso directo tampoco, que apunta a donde quiera",
+          pol_cadena.can_open(cadena_caja / "x.lnk").verdict is Verdict.DENY)
+    check("fuera de tus raices no se abre nada",
+          pol_cadena.can_open(Path("C:/Windows/notepad.pdf")).verdict
+          is Verdict.DENY)
+
+    shutil.rmtree(cadena_caja, ignore_errors=True)
+
     shutil.rmtree(sandbox, ignore_errors=True)
     shutil.rmtree(vault.root, ignore_errors=True)
 

@@ -11,7 +11,8 @@ import os
 import re
 from pathlib import Path
 
-from .base import PendingAction, Skill, SkillContext, SkillResult
+from .base import (Entrega, PendingAction, Skill, SkillContext,
+                   SkillResult)
 
 FIND = re.compile(r"\b(busca|b[uú]scame|encuentra|localiza|d[oó]nde est[aá])\b", re.I)
 ORGANIZE = re.compile(r"\b(organiza|ordena|acomoda|clasifica|limpia)\b", re.I)
@@ -97,12 +98,19 @@ class ArchivosSkill(Skill):
             lines.append(f"- **{f.name}**  ·  {_human(f.size)}  \n"
                          f"  `{f.path.parent}`")
 
+        # La mejor coincidencia se **entrega**, para que un «...y abrelo» en
+        # la misma frase tenga algo concreto que abrir. Esta skill no sabe
+        # que existe `sistema` (regla 5): deja el objeto resuelto y el
+        # router decide si alguien lo recoge.
+        mejor = hits[0]
         return SkillResult(
-            speak=f"{len(hits)} coincidencias. La mejor: {hits[0].name}.",
+            speak=f"{len(hits)} coincidencias. La mejor: {mejor.name}.",
             display="\n".join(lines),
             data={"query": query, "hits": len(hits),
                   "files": [str(f.path) for f in hits[:12]],
-                  "top": str(hits[0].path)})
+                  "top": str(mejor.path)},
+            entrega=Entrega(kind="carpeta" if mejor.is_dir else "archivo",
+                            valor=str(mejor.path), etiqueta=mejor.name))
 
     # ── organizar ─────────────────────────────────────────────────
     def _organize(self, ctx: SkillContext, text: str) -> SkillResult:

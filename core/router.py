@@ -34,7 +34,7 @@ from skills import PendingAction, Skill, SkillContext, SkillResult
 from .chat import Conversation, build_conversation
 from .config import Config
 from .engine import Engine, ask_json, enum_schema
-from .lang import limpia
+from .lang import ENCLITICO, limpia
 from .policy import Policy
 
 # Cuanta confianza hace falta para que el enrutado rapido decida solo.
@@ -86,11 +86,22 @@ FOLLOWUP = re.compile(
 
 # Un verbo de accion cancela el seguimiento: «abre eso» lleva anafora pero
 # es una orden, y las ordenes son de las skills.
+#
+# El sufijo `(?:me|te|se|lo|la|le|los|las|nos)*` no es adorno: en español el
+# pronombre se pega al imperativo, y `\babre\b` **no casa con «abrelo»** —
+# la frontera de palabra exige un no-alfanumerico detras y ahi hay una «l».
+# Sin eso, «abrelo» no contaba como orden: se tomaba por continuacion de la
+# conversacion (`is_followup` pide que NO haya verbo) y acababa en charla en
+# vez de abrir nada. Es la forma mas natural de pedirlo y era la que menos
+# funcionaba.
+# Y con el pronombre pegado el imperativo **lleva tilde**: «ábrelo»,
+# «guárdalo», «ciérralas». Es lo que transcribe el STT, asi que los verbos
+# que admiten enclitico llevan su clase de acento.
 ACTION = re.compile(
-    r"\b(abre|abrir|lanza|ejecuta|inicia|arranca|cierra|enfoca|organiza|"
-    r"mueve|renombra|borra|recuerda|apunta|anota|guarda|escribe|busca|"
-    r"b[uú]scame|investiga|sube|baja|silencia|pausa|reproduce|bloquea|"
-    r"copia|pega|cambia a)\b", re.I)
+    r"\b([aá]bre|abrir|l[aá]nza|ejec[uú]ta|inicia|arranca|c[ií]erra|enfoca|"
+    r"organiza|mu[eé]ve|renombra|borra|recuerda|ap[uú]nta|an[oó]ta|gu[aá]rda|"
+    r"escribe|b[uú]sca|investiga|s[uú]be|b[aá]ja|silencia|pausa|reproduce|"
+    r"bloquea|c[oó]pia|pega|cambia a)" + ENCLITICO + r"\b", re.I)
 
 
 # comandos literales — no gastan motor
@@ -114,6 +125,10 @@ class Route:
     # Las candidatas que empataron, cuando `how == "ambiguo"`. La decision
     # de cual es se la queda el usuario, que es quien sabe.
     opciones: tuple[str, ...] = ()
+    # Cuando la frase pedia dos cosas: la mitad que atiende esta ruta y la
+    # que queda. Vacias en el caso normal, que es casi siempre.
+    primera: str = ""
+    resto: str = ""
 
 
 class Router:
@@ -210,9 +225,57 @@ class Router:
             return ()
         return candidatas[:3]
 
+    # ── una frase, dos peticiones ─────────────────────────────────
+    @staticmethod
+    def _partir(text: str) -> tuple[str, str]:
+        """Parte «busca el informe y abrelo» en sus dos mitades.
+
+        Devuelve `("", "")` si no hay dos peticiones, que es el caso normal.
+
+        **Partir de mas es el riesgo entero de esta funcion**, asi que las
+        reglas son deliberadamente estrechas y ninguna es opcional:
+
+          1. Se corta por un conector explicito (`y`, `y luego`, `despues`).
+          2. **Las dos mitades tienen que llevar verbo de accion.** Esto es
+             lo que salva «busca el informe y el contrato», que es UNA
+             busqueda de dos cosas y no dos peticiones. Sin verbo detras del
+             conector, no se parte.
+          3. Se corta por el **ultimo** conector que cumpla, no por el
+             primero: en «busca el pdf de ventas y marketing y abrelo», el
+             primer «y» esta dentro del nombre.
+          4. Una sola vez. Esto no es un planificador y no debe parecerlo:
+             dos mitades, tope duro. Encadenar tres cosas seguidas sin que
+             el usuario vea nada intermedio es justo donde una frase mal
+             oida deja de poder repararse.
+        """
+        limpio = text.strip()
+        if len(limpio.split()) < 4:
+            return "", ""
+
+        corte = None
+        for m in re.finditer(r"\s+(?:y\s+luego|y\s+despu[eé]s|y\s+ahora|luego|"
+                             r"despu[eé]s|y)\s+", limpio, re.I):
+            izquierda, derecha = limpio[:m.start()], limpio[m.end():]
+            if (len(izquierda.split()) >= 2 and len(derecha.split()) >= 1
+                    and ACTION.search(izquierda) and ACTION.search(derecha)):
+                corte = m
+        if corte is None:
+            return "", ""
+        return limpio[:corte.start()].strip(), limpio[corte.end():].strip()
+
     # ── decidir ───────────────────────────────────────────────────
-    async def decide(self, text: str) -> Route:
+    async def decide(self, text: str, encadenar: bool = True) -> Route:
         clean = text.strip()
+
+        # Si la frase pide dos cosas, esta ruta atiende la PRIMERA y se
+        # queda con el resto. `encadenar=False` en la segunda vuelta: dos
+        # mitades es el tope, y sin este freno una frase con tres conectores
+        # se enrutaria en cascada sin que nadie vea los pasos intermedios.
+        primera, resto = self._partir(clean) if encadenar else ("", "")
+        if resto:
+            ruta = await self.decide(primera, encadenar=False)
+            ruta.primera, ruta.resto = primera, resto
+            return ruta
 
         # 0. una accion espera confirmacion: tiene prioridad sobre todo
         if self.pending is not None:
@@ -322,16 +385,23 @@ class Router:
         route = route or await self.decide(text)
         t0 = time.time()
 
+        # Con la frase partida, esta ruta atiende solo su mitad: pasarle la
+        # frase entera a `archivos` le haria buscar «el informe y abrelo».
+        propio = route.primera or text
+
         if route.how == "ambiguo":
             res = self._preguntar_cual(text, route)
         elif route.skill.startswith("_"):
             res = await self._builtin(route.skill)
         elif route.skill in self.skills:
+            # El eco repite la frase ENTERA, no la mitad: lo que hay que
+            # confirmar es lo que se dijo, y confirmarlo relanza la cadena
+            # completa desde el principio.
             duda = self._eco(text, route, oido)
             if duda is not None:
                 res = duda
             else:
-                ctx = self._ctx(text)
+                ctx = self._ctx(propio)
                 try:
                     res = await self.skills[route.skill].run(ctx)
                 except Exception as exc:
@@ -339,6 +409,8 @@ class Router:
                         ok=False, error=f"{type(exc).__name__}: {exc}",
                         speak=f"La skill {route.skill} fallo.",
                         display=f"# Error en `{route.skill}`\n\n```\n{exc}\n```")
+                if route.resto:
+                    res = await self._encadenar(res, route)
         else:
             res = await self._freeform(text)
 
@@ -362,6 +434,66 @@ class Router:
             self.chat.add("assistant", res.speak or res.error)
 
         return route, res
+
+    # ── pasar el testigo ──────────────────────────────────────────
+    async def _encadenar(self, primero: SkillResult, route: Route) -> SkillResult:
+        """La segunda mitad de la frase, con lo que resolvio la primera.
+
+        Cuatro frenos, y cada uno tapa una forma distinta de hacer daño:
+
+          1. **Si la primera no salio bien, no hay segunda.** Abrir el
+             resultado de una busqueda que no encontro nada es abrir
+             cualquier cosa.
+          2. **Si la primera espera un «si», la cadena se detiene ahi.**
+             Encadenar por encima de una confirmacion pendiente seria
+             ejecutar lo que el usuario todavia no ha autorizado (regla 6).
+          3. **La segunda skill tiene que ACEPTAR el tipo entregado.** No se
+             le pasa la frase para que la reinterprete: recibe un objeto ya
+             resuelto o no corre. «Abrelo» suelto haria que `sistema`
+             buscara una aplicacion llamada «lo».
+          4. **La segunda pasa por su politica**, porque es una ejecucion
+             normal de skill. Que se la pidieras en la misma frase no la
+             convierte en parte de la primera.
+
+        Cuando algo de esto falla, se hace la primera mitad y **se dice** que
+        la segunda no. Media tarea anunciada entera es peor que media tarea.
+        """
+        if not primero.ok or primero.pending is not None:
+            return primero
+
+        ruta2 = await self.decide(route.resto, encadenar=False)
+        skill2 = self.skills.get(ruta2.skill)
+        entrega = primero.entrega
+
+        if entrega is None or skill2 is None or entrega.kind not in skill2.acepta:
+            falta = (f"no se encadenar «{route.resto}» con "
+                     f"{'eso' if entrega is None else 'un ' + entrega.kind}")
+            primero.display += f"\n\n---\n\n> Hice lo primero. Lo segundo, {falta}."
+            primero.data["cadena"] = {"resto": route.resto, "hecho": False,
+                                      "motivo": falta}
+            return primero
+
+        ctx = self._ctx(route.resto)
+        ctx.slots["entrega"] = entrega
+        try:
+            segundo = await skill2.run(ctx)
+        except Exception as exc:
+            primero.display += f"\n\n---\n\n> Lo segundo fallo: `{exc}`"
+            primero.data["cadena"] = {"resto": route.resto, "hecho": False,
+                                      "motivo": str(exc)[:120]}
+            return primero
+
+        return SkillResult(
+            speak=" ".join(p for p in (primero.speak, segundo.speak) if p),
+            display=f"{primero.display}\n\n---\n\n{segundo.display}",
+            data={**primero.data, **segundo.data,
+                  "cadena": {"resto": route.resto, "hecho": True,
+                             "skill": skill2.name, "entrega": str(entrega)}},
+            writes=[*primero.writes, *segundo.writes],
+            ok=segundo.ok, error=segundo.error,
+            # La confirmacion de la segunda mitad sube tal cual: si abrir
+            # aquello necesitaba un «si», sigue necesitandolo.
+            pending=segundo.pending)
 
     # ── no adivinar: preguntar ────────────────────────────────────
     def _preguntar_cual(self, text: str, route: Route) -> SkillResult:
