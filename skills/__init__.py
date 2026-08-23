@@ -7,7 +7,8 @@ from .agenda import AgendaSkill
 from .archivos import ArchivosSkill
 from core.bus import BUS
 
-from .base import PendingAction, Skill, SkillContext, SkillResult
+from .base import (Entrega, PendingAction, Skill, SkillContext,
+                   SkillResult)
 from .documentos import DocumentosSkill
 from .inbox import InboxSkill
 from .memoria import MemoriaSkill
@@ -64,4 +65,4 @@ def build_skills(cfg: "Config") -> dict[str, Skill]:
 
 
 __all__ = ["Skill", "SkillContext", "SkillResult", "PendingAction",
-           "ALL_SKILLS", "build_skills"]
+           "Entrega", "ALL_SKILLS", "build_skills"]

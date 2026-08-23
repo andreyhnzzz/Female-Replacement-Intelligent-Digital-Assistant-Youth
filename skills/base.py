@@ -55,6 +55,29 @@ class SkillContext:
     policy: "Policy | None" = None
 
 
+@dataclass(frozen=True, slots=True)
+class Entrega:
+    """Lo que una skill **resolvio** y otra puede consumir.
+
+    Es la pieza que permite que un turno cruce dos capacidades sin que
+    ninguna de las dos sepa que existe la otra. `archivos` encuentra un PDF y
+    lo entrega; `sistema` lo abre. Ni una importa a la otra (regla 5): el
+    router es quien pasa el testigo.
+
+    **Tipada a proposito.** La alternativa —pasar la frase entera a la
+    segunda skill— es justo lo que no puede hacerse: «abrelo» enrutado solo
+    haria que `sistema` buscara una aplicacion llamada «lo», que es la forma
+    exacta del incidente del 17/08/2026. La segunda skill no reinterpreta
+    nada: recibe un objeto ya resuelto o no se ejecuta.
+    """
+    kind: str                        # archivo | carpeta | url | texto
+    valor: str                       # la ruta, la URL o el texto
+    etiqueta: str = ""               # como se nombra en voz alta
+
+    def __str__(self) -> str:
+        return self.etiqueta or self.valor
+
+
 @dataclass
 class SkillResult:
     speak: str = ""                                  # voz: corto
@@ -64,6 +87,7 @@ class SkillResult:
     ok: bool = True
     error: str = ""
     pending: PendingAction | None = None                 # espera confirmacion
+    entrega: Entrega | None = None                       # para encadenar
 
     def to_json(self) -> dict[str, Any]:
         return {"speak": self.speak, "display": self.display, "data": self.data,
@@ -90,6 +114,14 @@ class Skill(ABC):
     # pasa cuando acierta a medias. Ver el incidente del 17/08/2026 en el
     # CLAUDE.md — una frase sobre si misma acabo abriendo WinRAR.
     riesgo: str = "inerte"
+
+    # Tipos de `Entrega` que esta skill sabe consumir cuando el turno viene
+    # encadenado. Vacio = no participa como segunda mitad de una frase.
+    #
+    # Declararlo aqui y no adivinarlo es lo que hace que el encadenado falle
+    # en seco en vez de a lo loco: si la segunda skill no acepta lo que la
+    # primera resolvio, no se ejecuta y se dice. Nadie reinterpreta la frase.
+    acepta: tuple[str, ...] = ()
 
     @property
     def tiene_efecto(self) -> bool:
