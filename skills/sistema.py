@@ -6,6 +6,7 @@ Es la mano de FRIDAY sobre la computadora. Depende solo de los puertos de
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 from .base import Skill, SkillContext, SkillResult
 
@@ -40,6 +41,7 @@ class SistemaSkill(Skill):
         r"maps|duckduckgo)\b",
     ]
     needs = ("apps", "launcher")
+    riesgo = "efecto"        # lanza aplicaciones y enfoca ventanas
 
     async def run(self, ctx: SkillContext) -> SkillResult:
         text = ctx.text.strip()

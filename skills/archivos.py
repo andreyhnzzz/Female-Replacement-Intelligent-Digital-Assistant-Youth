@@ -60,6 +60,7 @@ class ArchivosSkill(Skill):
         r"(archivos?|carpetas?|documentos?|ficheros?|pdf|im[aá]genes?|fotos?)\b",
     ]
     needs = ("files",)
+    riesgo = "efecto"        # mueve, renombra y manda a la papelera
 
     async def run(self, ctx: SkillContext) -> SkillResult:
         missing = self.unavailable(ctx)

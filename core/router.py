@@ -1,19 +1,27 @@
 """El enrutador. Yo hablo, FRIDAY decide quien trabaja.
 
-Cuatro caminos, del mas barato al mas caro:
+Los caminos, del mas barato al mas caro:
 
   0. CONFIRMACION  hay una accion esperando un si. Nada mas importa.
   1. SEGUIMIENTO   la frase no se sostiene sola («y eso cuanto cuesta»):
                    es el turno anterior el que la explica.
   2. RAPIDO        regex de las skills. Sin latencia, sin motor. Cubre el 80%.
+  2a. EMPATE       dos skills igual de buenas y alguna hace algo: se pregunta
+                   cual, en vez de adivinar.
   2b. CHARLA       nadie reconocio nada y no hay verbo de accion: es
                    conversacion, y preguntarselo al motor cuesta un turno
                    entero de latencia para confirmar lo evidente.
   3. PENSADO       el motor clasifica y, si no encaja en nada, responde libre.
+  3a. RESCATE      el motor mando una frase sin verbo a una skill con efecto
+                   que no reconocio nada suyo: cae a conversacion.
+
+Y transversal a todos: si la frase venia de un dictado dudoso y la ruta
+tiene consecuencias, se repite en voz alta antes de hacer nada (`_eco`).
 """
 from __future__ import annotations
 
 import asyncio
+import inspect
 import re
 import time
 from dataclasses import dataclass
@@ -26,9 +34,34 @@ from skills import PendingAction, Skill, SkillContext, SkillResult
 from .chat import Conversation, build_conversation
 from .config import Config
 from .engine import Engine, ask_json, enum_schema
+from .lang import limpia
 from .policy import Policy
 
+# Cuanta confianza hace falta para que el enrutado rapido decida solo.
+#
+# Dos umbrales y no uno, y la diferencia es el **coste de equivocarse**, no
+# la dificultad de acertar. Enrutar mal a una skill que lee cuesta una
+# respuesta rara: el usuario repite la frase y ya. Enrutar mal a una que
+# lanza, mueve o apaga cuesta que pase. El 17/08/2026 «Describete a ti misma
+# en dos palabras» puntuo 0.45 contra un acceso directo y FRIDAY abrio el
+# changelog de WinRAR; el enrutado siempre sera probabilistico, asi que la
+# defensa es pedirle mas a lo que tiene consecuencias.
 FAST_THRESHOLD = 0.62
+FAST_THRESHOLD_EFECTO = 0.72
+
+# Si las dos mejores estan mas cerca que esto, no hay ganadora: hay empate.
+# Con una skill de efecto en el empate, se pregunta en vez de elegir.
+MARGEN_AMBIGUO = 0.08
+
+# Por debajo de esta confianza del STT, una orden con efecto se repite antes
+# de ejecutarla. Es la exponencial del `avg_logprob` de faster-whisper.
+#
+# **Este numero esta puesto por criterio, no medido** — el cableado y la
+# logica si estan probados, pero cual es el corte correcto depende de tu
+# microfono y de tu voz, y eso solo se sabe dictando un rato. Ver el ROADMAP.
+# Equivocarse por arriba es peor que por abajo: preguntar de mas entrena a
+# decir «si» sin escuchar, y entonces se pierde la confirmacion que importaba.
+OIDO_DUDOSO = 0.55
 
 CONFIRM = re.compile(r"^\s*(s[ií]|dale|adelante|confirmo?|confirmado|"
                      r"hazlo|procede|correcto|ok|okay|va)\s*[.!]?\s*$", re.I)
@@ -76,8 +109,11 @@ DIRECT = {
 class Route:
     skill: str
     confidence: float
-    how: str              # fast | engine | fallback | direct | confirm
+    how: str              # fast | engine | fallback | direct | confirm | ambiguo
     scores: dict[str, float]
+    # Las candidatas que empataron, cuando `how == "ambiguo"`. La decision
+    # de cual es se la queda el usuario, que es quien sabe.
+    opciones: tuple[str, ...] = ()
 
 
 class Router:
@@ -123,6 +159,57 @@ class Router:
         return (not ACTION.search(text)
                 and len(text.split()) <= self.smalltalk_words)
 
+    # ── cuanta confianza hace falta, y cuando no hay ganadora ─────
+    def _umbral(self, nombre: str, text: str) -> float:
+        """Lo que se le exige a esta skill para actuar sin preguntar.
+
+        La primera version de esto subia el listón a **toda** skill de
+        efecto, y estaba mal: «abre eso» es una orden de tres palabras,
+        perfectamente clara, y se quedaba fuera del camino rapido para
+        acabar costando un turno de motor. Castigar la brevedad es castigar
+        justo el caso en que FRIDAY tiene que ser instantanea.
+
+        Lo que separa una orden de un accidente no es el puntaje, es el
+        **verbo**. «Abre eso» pide algo; «describete a ti misma en dos
+        palabras» no pide nada y aun asi rozaba a `sistema` por compartir
+        una palabra. Asi que el listón sube solo cuando la frase no tiene
+        verbo de accion ni nombra a la skill: ahi, que una skill que lanza
+        programas sea la mejor candidata es mas sospechoso que informativo.
+        """
+        skill = self.skills.get(nombre)
+        if skill is None or not skill.tiene_efecto:
+            return FAST_THRESHOLD
+        if ACTION.search(text) or re.search(rf"\b{re.escape(nombre)}\b", text, re.I):
+            return FAST_THRESHOLD
+        return FAST_THRESHOLD_EFECTO
+
+    def _empate(self, scores: dict[str, float], best: str) -> tuple[str, ...]:
+        """Las candidatas que empatan con la mejor, si hay algo que perder.
+
+        Solo se declara empate cuando **alguna de las dos tiene efecto**. Dos
+        skills que solo leen peleandose por una frase no merecen una
+        pregunta: elegir la que sea da una respuesta rara y ya. Pero
+        «organiza esto» empatado entre `archivos` (mueve cuarenta ficheros) y
+        otra cosa no es una duda que convenga resolver adivinando.
+
+        Preguntar cuesta una frase. Equivocarse de skill con efecto puede
+        costar una tarde.
+        """
+        mejor = scores[best]
+        if mejor < FAST_THRESHOLD:
+            # Nadie destaca: esto no es un empate, es que nadie lo reconocio.
+            # Ya hay un camino para eso —el motor— y es mejor que preguntar.
+            return ()
+        cerca = [n for n, s in scores.items()
+                 if n != best and mejor - s <= MARGEN_AMBIGUO and s > 0]
+        if not cerca:
+            return ()
+        candidatas = (best, *sorted(cerca, key=lambda n: -scores[n]))
+        if not any(self.skills[n].tiene_efecto for n in candidatas
+                   if n in self.skills):
+            return ()
+        return candidatas[:3]
+
     # ── decidir ───────────────────────────────────────────────────
     async def decide(self, text: str) -> Route:
         clean = text.strip()
@@ -146,8 +233,14 @@ class Router:
 
         scores = {n: s.matches(clean) for n, s in self.skills.items()}
         best = max(scores, key=scores.get) if scores else ""
-        if best and scores[best] >= FAST_THRESHOLD:
-            return Route(best, scores[best], "fast", scores)
+
+        if best and scores[best] > 0:
+            empate = self._empate(scores, best)
+            if empate:
+                return Route(best, scores[best], "ambiguo", scores,
+                             opciones=empate)
+            if scores[best] >= self._umbral(best, clean):
+                return Route(best, scores[best], "fast", scores)
 
         # 2b. charla evidente: nadie reconocio nada, no hay verbo de accion y
         # la frase es corta. Un turno de conversacion gastaba DOS llamadas al
@@ -184,25 +277,68 @@ class Router:
                 conf = float(data.get("confidence", 0.5))
             except (TypeError, ValueError):
                 conf = 0.5          # el numero es informativo; el nombre manda
-            return Route(name if name in self.skills else "none", conf, "engine", scores)
+            elegida = name if name in self.skills else "none"
+            if self._sospechoso(elegida, clean, scores):
+                # El motor mando una frase sin verbo a una skill que actua, y
+                # ninguno de los disparadores de esa skill reconocio nada.
+                # Es exactamente la forma del 17/08/2026: «Describete a ti
+                # misma en dos palabras» -> `sistema`, confianza 0.85, y
+                # FRIDAY abrio el changelog de WinRAR. La confianza que
+                # declara el modelo no vale como guardia porque **es el
+                # modelo el que se esta equivocando**; lo que si vale es que
+                # dos señales independientes no coincidan.
+                return Route("none", conf, "chat-rescate", scores)
+            return Route(elegida, conf, "engine", scores)
         except Exception:
             return Route(best or "none", scores.get(best, 0.0), "fallback", scores)
 
+    def _sospechoso(self, elegida: str, text: str, scores: dict[str, float]) -> bool:
+        """¿El motor mando esto a una skill con efecto sin ningun apoyo?
+
+        Tres condiciones a la vez, y las tres hacen falta:
+
+          1. La skill **hace** algo (si solo lee, equivocarse sale barato).
+          2. La frase no tiene **ningun verbo de accion**: no esta pidiendo.
+          3. Los disparadores de esa skill puntuaron **cero**: ni una palabra
+             suya aparece.
+
+        Con las tres, lo probable no es que el usuario haya pedido algo raro:
+        es que el modelo haya elegido mal. Cae a conversacion, que es la
+        respuesta correcta a una frase que no pide nada.
+        """
+        skill = self.skills.get(elegida)
+        if skill is None or not skill.tiene_efecto:
+            return False
+        return not ACTION.search(text) and scores.get(elegida, 0.0) <= 0.0
+
     # ── ejecutar ──────────────────────────────────────────────────
-    async def dispatch(self, text: str, route: Route | None = None) -> tuple[Route, SkillResult]:
+    async def dispatch(self, text: str, route: Route | None = None,
+                       oido: float = 1.0) -> tuple[Route, SkillResult]:
+        """Ejecuta la ruta. `oido` es lo seguro que estaba el STT (0..1).
+
+        Un turno escrito llega con 1.0 y no cambia nada. Uno dictado llega
+        con lo que dijo faster-whisper, y ahi si: ver `_eco`.
+        """
         route = route or await self.decide(text)
         t0 = time.time()
 
-        if route.skill.startswith("_"):
+        if route.how == "ambiguo":
+            res = self._preguntar_cual(text, route)
+        elif route.skill.startswith("_"):
             res = await self._builtin(route.skill)
         elif route.skill in self.skills:
-            ctx = self._ctx(text)
-            try:
-                res = await self.skills[route.skill].run(ctx)
-            except Exception as exc:
-                res = SkillResult(ok=False, error=f"{type(exc).__name__}: {exc}",
-                                  speak=f"La skill {route.skill} fallo.",
-                                  display=f"# Error en `{route.skill}`\n\n```\n{exc}\n```")
+            duda = self._eco(text, route, oido)
+            if duda is not None:
+                res = duda
+            else:
+                ctx = self._ctx(text)
+                try:
+                    res = await self.skills[route.skill].run(ctx)
+                except Exception as exc:
+                    res = SkillResult(
+                        ok=False, error=f"{type(exc).__name__}: {exc}",
+                        speak=f"La skill {route.skill} fallo.",
+                        display=f"# Error en `{route.skill}`\n\n```\n{exc}\n```")
         else:
             res = await self._freeform(text)
 
@@ -226,6 +362,69 @@ class Router:
             self.chat.add("assistant", res.speak or res.error)
 
         return route, res
+
+    # ── no adivinar: preguntar ────────────────────────────────────
+    def _preguntar_cual(self, text: str, route: Route) -> SkillResult:
+        """Dos skills empatadas y una de ellas hace algo. Se pregunta.
+
+        No arma una accion pendiente: la respuesta no es «si» ni «no», es un
+        nombre, y esa frase se enruta sola en el turno siguiente con la
+        ventaja de que ahora el usuario esta nombrando la skill — que es la
+        señal mas fuerte que tiene el puntaje.
+        """
+        nombres = [n for n in route.opciones if n in self.skills]
+        humanos = [f"**{n}** ({self.skills[n].description.split('.')[0].lower()})"
+                   for n in nombres]
+        hablado = " o ".join(n for n in nombres[:2])
+        return SkillResult(
+            speak=f"No se si te refieres a {hablado}. ¿Cual?",
+            display=("# ¿Cual de las dos?\n\nEsa frase encaja igual de bien en "
+                     "mas de un sitio, y alguna de ellas cambia cosas. Dime "
+                     "cual:\n\n" + "\n".join(f"- {h}" for h in humanos)),
+            data={"ambiguo": nombres,
+                  "scores": {n: route.scores.get(n, 0.0) for n in nombres}})
+
+    def _eco(self, text: str, route: Route, oido: float) -> SkillResult | None:
+        """Repetir lo que se entendio antes de hacer algo con consecuencias.
+
+        None = adelante. Un `SkillResult` = espera un «si».
+
+        El STT no falla de golpe: falla poco a poco y con seguridad aparente.
+        Cuando `avg_logprob` viene bajo, lo transcrito suele ser parecido a
+        lo dicho pero no igual — «Desactual Bluetooth» por «desactiva el
+        Bluetooth»— y ahi el enrutado hace su trabajo sobre un texto que
+        nunca se dijo. Ninguno de los guardias de despues puede verlo: la
+        politica autoriza la accion correcta para la frase equivocada.
+
+        Asi que el eco solo mira dos cosas, y las dos importan:
+
+        - **La skill tiene efecto.** Repetir una pregunta que solo iba a leer
+          algo es hacer perder el tiempo, y confirmar de mas entrena a decir
+          «si» sin escuchar, que es como se pierde la confirmacion que si
+          importaba.
+        - **El oido venia dudoso.** Un turno escrito llega con 1.0 y no pasa
+          por aqui nunca.
+        """
+        skill = self.skills.get(route.skill)
+        if skill is None or not skill.tiene_efecto or oido >= OIDO_DUDOSO:
+            return None
+
+        limpio = limpia(text)
+
+        async def _seguir() -> SkillResult:
+            # Se rearranca el turno entero, no solo la skill: si lo que
+            # confirmo fue el TEXTO, la ruta hay que volver a calcularla
+            # sobre el mismo texto, con `oido` ya resuelto por el «si».
+            _r, res = await self.dispatch(text, route, oido=1.0)
+            return res
+
+        return SkillResult(
+            speak=f"¿Dijiste «{limpio}»?",
+            display=(f"# ¿Te oi bien?\n\n> {limpio}\n\nTe entendi con poca "
+                     f"claridad ({oido:.0%}) y esto **{skill.name}** lo "
+                     f"cambia. Di «si» y voy."),
+            pending=PendingAction(describe=limpio, run=_seguir, ttl_s=90.0),
+            data={"eco": limpio, "oido": round(oido, 3), "skill": skill.name})
 
     # ── conversacion libre ────────────────────────────────────────
     def _recall(self, text: str) -> tuple[list, str]:
@@ -298,7 +497,13 @@ class Router:
                 return SkillResult(speak="Ya no hay nada pendiente.",
                                    display="# Nada pendiente")
             try:
-                return action.run()
+                salida = action.run()
+                # Casi todas las acciones pendientes son sincronas; la que
+                # rearranca un turno tras el eco de una transcripcion dudosa
+                # no puede serlo, porque vuelve a pasar por el motor.
+                if inspect.isawaitable(salida):
+                    salida = await salida
+                return salida
             except Exception as exc:
                 return SkillResult(ok=False, error=str(exc),
                                    speak="Fallo al aplicar.",

@@ -22,9 +22,14 @@ class PendingAction:
 
     Existe porque el STT se equivoca. Antes de mover cuarenta archivos,
     FRIDAY describe lo que va a hacer y espera confirmacion explicita.
+
+    `run` puede ser sincrona o devolver un awaitable. Casi todas son
+    sincronas —mover archivos, bajar el volumen— pero la que rearranca un
+    turno entero tras el eco de una transcripcion dudosa tiene que poder
+    esperar al motor. Quien la ejecuta (`Router._builtin`) resuelve las dos.
     """
     describe: str
-    run: Callable[[], "SkillResult"]
+    run: Callable[[], "SkillResult | Any"]
     created: float = field(default_factory=time.time)
     ttl_s: float = 120.0
 
@@ -71,6 +76,24 @@ class Skill(ABC):
     description: str = ""
     triggers: list[str] = []          # patrones regex para el enrutado rapido
     needs: tuple[str, ...] = ()       # puertos de SystemAccess requeridos
+
+    # ¿Que pasa si el enrutado se equivoca y llega aqui una frase que no era?
+    #
+    #   "inerte"  se lee algo y se contesta. El coste de fallar es una
+    #             respuesta rara, y el usuario repite la frase.
+    #   "efecto"  se lanza, se mueve, se apaga o se borra algo. El coste de
+    #             fallar es que pasa.
+    #
+    # No es documentacion: `core/router.py` le exige mas confianza a las de
+    # efecto antes de dejarlas actuar. El enrutado es probabilistico y
+    # siempre lo sera; lo que no puede ser igual de probabilistico es lo que
+    # pasa cuando acierta a medias. Ver el incidente del 17/08/2026 en el
+    # CLAUDE.md — una frase sobre si misma acabo abriendo WinRAR.
+    riesgo: str = "inerte"
+
+    @property
+    def tiene_efecto(self) -> bool:
+        return self.riesgo == "efecto"
 
     def __init__(self, ctx_cfg: "Config"):
         self.cfg = ctx_cfg

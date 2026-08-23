@@ -50,6 +50,7 @@ class MemoriaSkill(Skill):
         r"\bcu[aá]nto ocupa\b", r"\bmemoria consolidada\b",
     ]
     needs = ()
+    riesgo = "efecto"        # retira notas del vault
 
     def __init__(self, ctx_cfg) -> None:
         super().__init__(ctx_cfg)

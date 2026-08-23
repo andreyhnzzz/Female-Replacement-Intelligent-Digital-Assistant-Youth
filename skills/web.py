@@ -57,6 +57,7 @@ class WebSkill(Skill):
         r"\bqu[eé] hay en (esta p[aá]gina|este enlace)\b",
     ]
     needs = ("pages",)
+    riesgo = "efecto"        # abre cosas en tu navegador
 
     async def run(self, ctx: SkillContext) -> SkillResult:
         gap = self.unavailable(ctx)
