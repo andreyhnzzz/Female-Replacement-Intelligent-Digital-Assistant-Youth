@@ -1100,6 +1100,66 @@ async def main() -> int:
     check("y lleva su modelo", e_ds.model == "deepseek-chat" and e_qw.model == "qwen-plus")
     check("el mismo spec reusa adaptador", sw._engine_for(ds.backend, ds) is e_ds)
 
+    # ══════════════════ EQUIVOCARSE BARATO Y CARO NO ES IGUAL ══════
+    print()
+    print("  -- el enrutado es probabilistico; sus consecuencias no --")
+    from core.router import OIDO_DUDOSO
+
+    check("una skill declara que pasa si el enrutado falla",
+          skills["archivos"].tiene_efecto and not skills["metricas"].tiene_efecto,
+          "mover cuarenta archivos y leer la CPU no cuestan lo mismo")
+
+    # El incidente del 17/08/2026, reproducido: el motor manda a `sistema`
+    # una frase que no pide nada y cuyos disparadores puntuaron cero.
+    class MotorTorcido(Engine):
+        name = "torcido"
+
+        async def complete(self, prompt, system="", **kw):
+            return '{"skill": "sistema", "confidence": 0.85}'
+
+    torcido = Router(real_cfg, vault, graph, MotorTorcido(real_cfg), skills,
+                     system=access, policy=policy)
+    larga = ("hoy me he levantado raro y llevo un rato dandole vueltas a lo "
+             "mismo sin llegar a ninguna parte")
+    ruta_mala = await torcido.decide(larga)
+    check("una frase que no pide nada no acaba lanzando un programa",
+          ruta_mala.skill == "none", f"{ruta_mala.skill} ({ruta_mala.how})")
+
+    class MotorInerte(Engine):
+        name = "inerte"
+
+        async def complete(self, prompt, system="", **kw):
+            return '{"skill": "metricas", "confidence": 0.85}'
+
+    suave = Router(real_cfg, vault, graph, MotorInerte(real_cfg), skills,
+                   system=access, policy=policy)
+    ruta_ok = await suave.decide(larga)
+    check("pero a una skill que solo lee se le deja pasar",
+          ruta_ok.skill == "metricas",
+          "equivocarse ahi cuesta una respuesta rara, no una tarde")
+
+    ruta_corta = await router.decide("abre eso")
+    check("una orden corta y clara sigue siendo instantanea",
+          ruta_corta.how == "fast", f"{ruta_corta.skill} ({ruta_corta.how})")
+
+    # -- el eco: repetir lo dudoso antes de actuar --
+    _r, res_eco = await router.dispatch("busca el archivo zorglub", oido=0.3)
+    check("con el oido dudoso, una orden con efecto se repite antes",
+          res_eco.pending is not None and "Dijiste" in res_eco.speak,
+          res_eco.speak)
+    router.pending = None
+    _r, res_claro = await router.dispatch("busca el archivo zorglub", oido=0.95)
+    check("y con el oido claro no se pregunta nada",
+          res_claro.pending is None, res_claro.speak[:60])
+    router.pending = None
+    _r, res_leer = await router.dispatch("dame las metricas", oido=0.1)
+    check("una skill que solo lee no se repite ni con el peor oido",
+          res_leer.pending is None,
+          "confirmar de mas entrena a decir «si» sin escuchar")
+    router.pending = None
+    check("un turno escrito nunca pasa por el eco", OIDO_DUDOSO < 1.0)
+
+
     shutil.rmtree(sandbox, ignore_errors=True)
     shutil.rmtree(vault.root, ignore_errors=True)
 
