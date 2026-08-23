@@ -11,8 +11,7 @@ import os
 import re
 from pathlib import Path
 
-from .base import (Entrega, PendingAction, Skill, SkillContext,
-                   SkillResult)
+from .base import Entrega, Skill, SkillContext, SkillResult
 
 FIND = re.compile(r"\b(busca|b[uú]scame|encuentra|localiza|d[oó]nde est[aá])\b", re.I)
 ORGANIZE = re.compile(r"\b(organiza|ordena|acomoda|clasifica|limpia)\b", re.I)
@@ -162,13 +161,11 @@ class ArchivosSkill(Skill):
                 ok=res.ok)
 
         if gate is not None and gate.needs_confirm:
-            return SkillResult(
+            return self._confirmar(
                 speak=f"Voy a mover {len(ops)} archivos en {root.name}. ¿Confirmas?",
-                display=display + f"\n\n---\n**Espera tu confirmacion.** {gate.reason}.\n\n"
-                                  "Di **si** para aplicar, **cancela** para descartar.",
-                data={"root": str(root), "planned": len(ops), "buckets": buckets},
-                pending=PendingAction(
-                    describe=f"organizar {root.name}: {len(ops)} movimientos", run=_apply))
+                resumen_md=display + f"\n\n**Espera tu confirmacion.** {gate.reason}.",
+                describe=f"organizar {root.name}: {len(ops)} movimientos", run=_apply,
+                data={"root": str(root), "planned": len(ops), "buckets": buckets})
 
         if gate is not None and not gate.allowed:
             return SkillResult(ok=False, error=gate.reason,
@@ -209,13 +206,12 @@ class ArchivosSkill(Skill):
                                display=f"# Renombrado\n\n{res.summary()}\n\n{preview}",
                                data={"applied": len(res.done)}, ok=res.ok)
 
-        return SkillResult(
+        return self._confirmar(
             speak=f"Voy a renombrar {len(ops)} archivos con el patron «{pattern}». ¿Confirmas?",
-            display=(f"# Plan de renombrado\n\n**{len(ops)}** archivos en `{root.name}`\n\n"
-                     f"patron: `{pattern}`\n\n### Muestra\n{preview}\n\n---\n"
-                     "Di **si** para aplicar, **cancela** para descartar."),
-            data={"planned": len(ops), "pattern": pattern, "root": str(root)},
-            pending=PendingAction(describe=f"renombrar {len(ops)} archivos", run=_apply))
+            resumen_md=(f"# Plan de renombrado\n\n**{len(ops)}** archivos en `{root.name}`\n\n"
+                       f"patron: `{pattern}`\n\n### Muestra\n{preview}"),
+            describe=f"renombrar {len(ops)} archivos", run=_apply,
+            data={"planned": len(ops), "pattern": pattern, "root": str(root)})
 
 
 def _list(ctx: SkillContext, root: Path):

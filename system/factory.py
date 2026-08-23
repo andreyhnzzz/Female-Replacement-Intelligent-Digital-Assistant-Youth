@@ -102,8 +102,11 @@ def _wire_windows(cfg: Any, policy: Policy, access: SystemAccess) -> None:
         reader = None
 
     try:
-        from system.win32.desktop import (WindowsClipboard, WindowsMediaControl,
-                                          WindowsSessionControl)
+        from system.win32.desktop import (
+            WindowsClipboard,
+            WindowsMediaControl,
+            WindowsSessionControl,
+        )
         access.media = WindowsMediaControl(policy)
         access.session = WindowsSessionControl(policy)
         access.clipboard = WindowsClipboard(policy)
@@ -115,8 +118,7 @@ def _wire_windows(cfg: Any, policy: Policy, access: SystemAccess) -> None:
     # proyecciones WinRT, que son opcionales. Cablearlos juntos dejaria sin
     # brillo a quien no tenga `winsdk`, que no tiene nada que ver.
     try:
-        from system.win32.radios import (WindowsDisplayControl,
-                                         WindowsRadioControl, winrt_disponible)
+        from system.win32.radios import WindowsDisplayControl, WindowsRadioControl, winrt_disponible
         access.display = WindowsDisplayControl(policy)
         if winrt_disponible():
             access.radios = WindowsRadioControl(policy)

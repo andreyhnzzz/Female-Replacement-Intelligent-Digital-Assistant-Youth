@@ -36,9 +36,9 @@ para saltarse el guardia (regla 6).
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Iterable
+from typing import Any, Container, Iterable
 
 # ── dias de la semana, como los escribe la gente ──────────────────
 _DIAS: dict[str, int] = {}
@@ -233,7 +233,7 @@ class Scheduler:
     # ── la decision ───────────────────────────────────────────────
     def due(self, ahora: datetime | None = None, *,
             eventos: list[dict] | None = None,
-            ya_disparado: set[str] | frozenset[str] = frozenset()) -> list[Disparo]:
+            ya_disparado: Container[str] = frozenset()) -> list[Disparo]:
         """Que toca en este instante. Puro: mismas entradas, misma salida.
 
         Los recordatorios van **antes** que los trabajos: si a las 08:30

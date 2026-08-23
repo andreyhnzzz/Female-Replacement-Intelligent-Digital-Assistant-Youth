@@ -34,39 +34,18 @@ import concurrent.futures
 import threading
 from typing import Any, Callable
 
-from core.lang import slug_words
 from core.policy import Policy
-from system.ports import RadioState
+
+# `normaliza_radio` vive en `system/ports.py` (es normalizacion de texto
+# pura, no algo especifico de Windows) y se re-exporta aqui sin cambios: el
+# nombre completo `system.win32.radios.normaliza_radio` sigue funcionando
+# para quien ya lo usaba.
+from system.ports import RadioState, normaliza_radio  # noqa: F401
 
 # Tope de espera de una operacion del hilo de dispositivos. Generoso porque
 # encender una radio tarda de verdad; acotado porque un turno hablado que se
 # queda esperando a la pila Bluetooth es un turno perdido.
 _TIMEOUT_S = 6.0
-
-_ALIAS = {
-    "bluetooth": "bluetooth", "bt": "bluetooth", "blue tooth": "bluetooth",
-    "wifi": "wifi", "wi fi": "wifi", "wlan": "wifi",
-    "red inalambrica": "wifi", "inalambrica": "wifi",
-}
-
-
-def normaliza_radio(kind: str) -> str:
-    """«el blue tooth», «wi fi» y «la red inalambrica» son `bluetooth` o `wifi`.
-
-    El STT parte los nombres compuestos casi siempre, asi que el alias se
-    busca **dentro** de la frase y no como cadena entera: el motor entrega
-    `{"radio": "el blue tooth"}` mas veces de las que entrega `"bluetooth"`.
-
-    Se prueban de mas largo a mas corto para que «wi fi» gane a un «bt» que
-    apareciera de refilon, y siempre con frontera de palabra: un `kind`
-    desconocido tiene que quedarse desconocido, porque tratarlo como una
-    radio cualquiera es apagar la que no era.
-    """
-    plano = f" {slug_words(kind)} "
-    for alias in sorted(_ALIAS, key=len, reverse=True):
-        if f" {alias} " in plano:
-            return _ALIAS[alias]
-    return ""
 
 
 # ============================================== el hilo de dispositivos

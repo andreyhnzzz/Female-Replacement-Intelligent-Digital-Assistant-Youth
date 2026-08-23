@@ -19,6 +19,7 @@ from typing import Any, Callable
 
 from core.engine import ask_json, enum_schema
 from core.lang import numero
+from system.ports import normaliza_radio
 
 from .base import PendingAction, Skill, SkillContext, SkillResult
 
@@ -553,11 +554,10 @@ class OrdenadorSkill(Skill):
     def _que_radio(args: dict[str, Any]) -> str:
         """Que radio nombro, tolerando como la escribe un modelo pequeño.
 
-        La normalizacion vive en `system/win32/radios.py` porque es donde
-        estan los alias; aqui solo se pide. Si la plataforma no tiene ese
-        modulo, no hay radios que tocar y esta rama no se alcanza.
+        La normalizacion vive en `system/ports.py` (regla 7: una skill
+        depende de los puertos, nunca de `system/win32/`) junto al resto
+        del contrato `RadioControl`.
         """
-        from system.win32.radios import normaliza_radio
         return normaliza_radio(str(args.get("radio", "")))
 
     def _radio(self, sys_, args: dict[str, Any], encender: bool) -> SkillResult:

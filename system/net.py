@@ -19,7 +19,7 @@ import asyncio
 from dataclasses import dataclass
 from urllib.parse import urljoin
 
-from core.http import close, session   # noqa: F401 — reexportadas a proposito
+from core.http import close, session  # noqa: F401 — reexportadas a proposito
 from core.policy import Decision, Policy
 
 DEFAULT_MAX_BYTES = 512 * 1024

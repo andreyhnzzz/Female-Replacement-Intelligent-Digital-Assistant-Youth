@@ -11,9 +11,9 @@ import re
 from datetime import datetime
 
 from core.engine import ask_json
+from memory.vault import slugify
 
 from .base import Skill, SkillContext, SkillResult
-from memory.vault import slugify
 
 WRITE_CUES = re.compile(
     r"\b(recuerda|anota|apunta|guarda|registra|toma nota|escribe|agrega|a[ñn]ade)\b", re.I)

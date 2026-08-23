@@ -329,7 +329,7 @@ class Consolidator:
     @staticmethod
     def _render(p: Plan, res: Resumen) -> str:
         cabecera = f"## {p.rango}" + (f" — {res.titulo}" if res.titulo else "")
-        cuerpo = "\n".join(f"- {l}" for l in res.lineas) or "- (nada que retener)"
+        cuerpo = "\n".join(f"- {linea}" for linea in res.lineas) or "- (nada que retener)"
         return (f"{cabecera}\n\n{cuerpo}\n\n"
                 f"> {len(p.sources)} notas diarias · {len(res.lineas)} apuntes "
                 f"retenidos · {p.rutina} rutinas omitidas · "
@@ -356,7 +356,7 @@ class Consolidator:
     @staticmethod
     def _apuntes(body: str) -> list[tuple[str, str]]:
         return [(m.group(2).lower(), m.group(3).strip())
-                for m in (_APUNTE.match(l) for l in body.splitlines()) if m]
+                for m in (_APUNTE.match(linea) for linea in body.splitlines()) if m]
 
     @staticmethod
     def _es_rutina(kind: str, text: str) -> bool:

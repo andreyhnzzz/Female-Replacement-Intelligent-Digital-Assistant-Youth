@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta
 
+from core.bus import BUS
 from core.engine import ask_json
 
 from .base import Skill, SkillContext, SkillResult
@@ -142,7 +143,12 @@ class AgendaSkill(Skill):
         )
         try:
             data = await ask_json(ctx.engine, prompt) or {}
-        except Exception:
+        except Exception as exc:
+            # `None` aqui se lee como «esto no agenda nada», que es
+            # exactamente lo que NO paso: el motor fallo. Sin avisar, un
+            # timeout se confundia con «no detecte una fecha».
+            BUS.report(f"agenda no pudo consultar al motor: {exc}",
+                      origen="agenda")
             return None
         if not data.get("add") or not data.get("date"):
             return None

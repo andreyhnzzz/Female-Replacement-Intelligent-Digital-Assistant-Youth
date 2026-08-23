@@ -16,6 +16,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
+from core.lang import slug_words
+
 
 # ══════════════════════════════════════════════ modelos de datos
 @dataclass(frozen=True, slots=True)
@@ -336,6 +338,36 @@ class RadioControl(Protocol):
 
     def state(self, kind: str) -> RadioState: ...
     def set(self, kind: str, on: bool) -> bool: ...
+
+
+# Alias que trae el STT para "bluetooth" y "wifi". Vive en el modulo del
+# Protocol, no en `system/win32/radios.py`: es normalizacion de texto pura,
+# sin nada de COM ni de hilos, y una skill no puede necesitar `import
+# system.win32.*` (regla 7) solo para nombrar una radio.
+_ALIAS_RADIO = {
+    "bluetooth": "bluetooth", "bt": "bluetooth", "blue tooth": "bluetooth",
+    "wifi": "wifi", "wi fi": "wifi", "wlan": "wifi",
+    "red inalambrica": "wifi", "inalambrica": "wifi",
+}
+
+
+def normaliza_radio(kind: str) -> str:
+    """«el blue tooth», «wi fi» y «la red inalambrica» son `bluetooth` o `wifi`.
+
+    El STT parte los nombres compuestos casi siempre, asi que el alias se
+    busca **dentro** de la frase y no como cadena entera: el motor entrega
+    `{"radio": "el blue tooth"}` mas veces de las que entrega `"bluetooth"`.
+
+    Se prueban de mas largo a mas corto para que «wi fi» gane a un «bt» que
+    apareciera de refilon, y siempre con frontera de palabra: un `kind`
+    desconocido tiene que quedarse desconocido, porque tratarlo como una
+    radio cualquiera es apagar la que no era.
+    """
+    plano = f" {slug_words(kind)} "
+    for alias in sorted(_ALIAS_RADIO, key=len, reverse=True):
+        if f" {alias} " in plano:
+            return _ALIAS_RADIO[alias]
+    return ""
 
 
 @runtime_checkable

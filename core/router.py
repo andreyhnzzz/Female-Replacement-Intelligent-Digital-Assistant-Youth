@@ -29,7 +29,7 @@ from typing import Any
 
 from memory.graph import Graph
 from memory.vault import Vault
-from skills import PendingAction, Skill, SkillContext, SkillResult
+from skills import TTL_ECO_S, PendingAction, Skill, SkillContext, SkillResult
 
 from .chat import Conversation, build_conversation
 from .config import Config
@@ -277,26 +277,53 @@ class Router:
             ruta.primera, ruta.resto = primera, resto
             return ruta
 
-        # 0. una accion espera confirmacion: tiene prioridad sobre todo
-        if self.pending is not None:
-            if self.pending.expired:
-                self.pending = None
-            elif CONFIRM.match(clean):
-                return Route("_confirm", 1.0, "confirm", {})
-            elif CANCEL.match(clean):
-                return Route("_cancel_pending", 1.0, "confirm", {})
+        pendiente = self._resolver_pendiente(clean)
+        if pendiente is not None:
+            return pendiente
 
+        directa = self._ruta_directa_o_seguimiento(clean)
+        if directa is not None:
+            return directa
+
+        scores = {n: s.matches(clean) for n, s in self.skills.items()}
+        rapida = self._enrutado_rapido(clean, scores)
+        if rapida is not None:
+            return rapida
+
+        # charla evidente: nadie reconocio nada, no hay verbo de accion y la
+        # frase es corta. Un turno de conversacion gastaba DOS llamadas al
+        # motor —clasificar y luego responder— y por `claude_code` cada una
+        # ronda los cuatro segundos. Esta es la que sobra.
+        if self._is_smalltalk(clean, scores):
+            return Route("none", 0.6, "chat-fast", scores)
+
+        return await self._preguntar_motor(clean, scores)
+
+    def _resolver_pendiente(self, clean: str) -> Route | None:
+        """Bloque 0: una accion que espera «si» manda sobre todo lo demas."""
+        if self.pending is None:
+            return None
+        if self.pending.expired:
+            self.pending = None
+            return None
+        if CONFIRM.match(clean):
+            return Route("_confirm", 1.0, "confirm", {})
+        if CANCEL.match(clean):
+            return Route("_cancel_pending", 1.0, "confirm", {})
+        return None
+
+    def _ruta_directa_o_seguimiento(self, clean: str) -> Route | None:
+        """Patrones fijos, y seguimiento: la frase depende del turno anterior."""
         for pat, name in DIRECT.items():
             if re.match(pat, clean, re.I):
                 return Route(name, 1.0, "direct", {})
-
-        # 1. continuacion del hilo: la frase depende del turno anterior
         if self.is_followup(clean):
             return Route("none", 0.9, "chat", {})
+        return None
 
-        scores = {n: s.matches(clean) for n, s in self.skills.items()}
+    def _enrutado_rapido(self, clean: str, scores: dict[str, float]) -> Route | None:
+        """Triggers de las skills: gana, empata, o no alcanza el umbral."""
         best = max(scores, key=scores.get) if scores else ""
-
         if best and scores[best] > 0:
             empate = self._empate(scores, best)
             if empate:
@@ -304,14 +331,11 @@ class Router:
                              opciones=empate)
             if scores[best] >= self._umbral(best, clean):
                 return Route(best, scores[best], "fast", scores)
+        return None
 
-        # 2b. charla evidente: nadie reconocio nada, no hay verbo de accion y
-        # la frase es corta. Un turno de conversacion gastaba DOS llamadas al
-        # motor —clasificar y luego responder— y por `claude_code` cada una
-        # ronda los cuatro segundos. Esta es la que sobra.
-        if self._is_smalltalk(clean, scores):
-            return Route("none", 0.6, "chat-fast", scores)
-
+    async def _preguntar_motor(self, clean: str, scores: dict[str, float]) -> Route:
+        """Sin ganador claro por triggers: se le pregunta al motor."""
+        best = max(scores, key=scores.get) if scores else ""
         catalog = "\n".join(f"- {n}: {s.description}" for n, s in self.skills.items())
         prompt = (
             f"SKILLS:\n{catalog}\n"
@@ -555,7 +579,7 @@ class Router:
             display=(f"# ¿Te oi bien?\n\n> {limpio}\n\nTe entendi con poca "
                      f"claridad ({oido:.0%}) y esto **{skill.name}** lo "
                      f"cambia. Di «si» y voy."),
-            pending=PendingAction(describe=limpio, run=_seguir, ttl_s=90.0),
+            pending=PendingAction(describe=limpio, run=_seguir, ttl_s=TTL_ECO_S),
             data={"eco": limpio, "oido": round(oido, 3), "skill": skill.name})
 
     # ── conversacion libre ────────────────────────────────────────

@@ -5,7 +5,7 @@ import re
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Callable, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
     from core.config import Config
@@ -14,6 +14,24 @@ if TYPE_CHECKING:
     from memory.graph import Graph
     from memory.vault import Vault
     from system.ports import SystemAccess
+
+
+# Cuanto dura una confirmacion pendiente antes de darse por olvidada. Tres
+# valores, no uno, porque la pregunta no siempre pide lo mismo:
+#
+#   TTL_CONFIRMACION_S    el caso comun — mover archivos, tocar el sistema.
+#                         Un «si» que llega mas tarde ya no es ese «si».
+#   TTL_CONFIRMACION_LARGA_S  la accion que confirma es ella misma lenta de
+#                         explicar (un encargo al taller, una consolidacion
+#                         de memoria): al usuario le toma mas leerla antes
+#                         de responder.
+#   TTL_ECO_S             repetir una transcripcion dudosa. Mas corto que el
+#                         resto a proposito: si tardas mas de minuto y medio
+#                         en confirmar lo que acabas de decir, es mas
+#                         probable que ya hayas seguido con otra cosa.
+TTL_CONFIRMACION_S = 120.0
+TTL_CONFIRMACION_LARGA_S = 180.0
+TTL_ECO_S = 90.0
 
 
 @dataclass(slots=True)
@@ -31,7 +49,7 @@ class PendingAction:
     describe: str
     run: Callable[[], "SkillResult | Any"]
     created: float = field(default_factory=time.time)
-    ttl_s: float = 120.0
+    ttl_s: float = TTL_CONFIRMACION_S
 
     @property
     def expired(self) -> bool:
@@ -158,6 +176,30 @@ class Skill(ABC):
         if re.search(rf"\b{re.escape(self.name)}\b", low):
             score += 0.35          # me llamo por mi nombre: no hay ambiguedad
         return round(min(score, 1.0), 3)
+
+    # Repetido a mano en media docena de skills antes de vivir aqui: el pie
+    # de "di si / cancela" que cierra cualquier display que espera un "si".
+    # Una sola redaccion evita que una skill nueva olvide la frase de
+    # cancelacion, que es lo que de verdad importa (regla del taller: quien
+    # no la escribe deja al usuario sin saber que puede decir que no).
+    CONFIRMA_PIE = "Di **si** para aplicar, **cancela** para descartar."
+
+    def _confirmar(self, *, speak: str, resumen_md: str, describe: str,
+                   run: Callable[[], "SkillResult | Any"],
+                   data: dict[str, Any] | None = None,
+                   ttl_s: float = TTL_CONFIRMACION_S, pie: str = "") -> SkillResult:
+        """Arma el `SkillResult` de una accion que espera un «si».
+
+        `resumen_md` es el display SIN el pie de confirmacion: lo que ya
+        describe la accion (plan, ruta, cambios). El helper le agrega el
+        separador y el pie, asi que cada skill solo aporta lo que la hace
+        distinta.
+        """
+        return SkillResult(
+            speak=speak,
+            display=f"{resumen_md}\n\n---\n{pie or self.CONFIRMA_PIE}",
+            data=data or {},
+            pending=PendingAction(describe=describe, run=run, ttl_s=ttl_s))
 
     def unavailable(self, ctx: SkillContext) -> str:
         """Que puerto falta para poder trabajar. Cadena vacia = todo listo."""

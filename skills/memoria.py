@@ -17,7 +17,7 @@ import re
 
 from memory.consolidate import Consolidator
 
-from .base import PendingAction, Skill, SkillContext, SkillResult
+from .base import TTL_CONFIRMACION_LARGA_S, PendingAction, Skill, SkillContext, SkillResult
 
 # «consolida», «compacta», «limpia»... sobre la memoria.
 COMPACTA = re.compile(
@@ -117,7 +117,7 @@ class MemoriaSkill(Skill):
                 pending=PendingAction(
                     describe=f"retirar {rep.notes} notas diarias ya resumidas",
                     run=lambda: self._retirar(ctx, con, rep),
-                    ttl_s=180.0))
+                    ttl_s=TTL_CONFIRMACION_LARGA_S))
 
         return SkillResult(
             speak=self._frase(rep),

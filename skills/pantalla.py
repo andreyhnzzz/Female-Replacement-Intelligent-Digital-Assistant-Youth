@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import re
 
+from core.bus import BUS
+
 from .base import Skill, SkillContext, SkillResult
 
 EXPLAIN = re.compile(r"\b(explica|expl[ií]came|qu[eé] dice|qu[eé] significa|"
@@ -41,8 +43,12 @@ class PantallaSkill(Skill):
         try:
             ctx.vault.log(f"Lectura de pantalla — {snap.active_title[:70]} "
                           f"({snap.source})", kind="pantalla")
-        except Exception:
-            pass
+        except Exception as exc:
+            # No anotar el diario no puede tumbar la respuesta —el usuario
+            # sigue esperando lo que pregunto— pero tampoco puede perderse
+            # en silencio: nada falla en silencio (CLAUDE.md).
+            BUS.report(f"no pude anotar la lectura de pantalla: {exc}",
+                      origen="pantalla")
 
         question = ctx.text.strip()
         wants_answer = bool(EXPLAIN.search(question)) or len(question.split()) > 4

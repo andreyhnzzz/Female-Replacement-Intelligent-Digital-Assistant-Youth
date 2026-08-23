@@ -31,7 +31,7 @@ QML_DIR = Path(__file__).parent / "qml"
 # corre si nadie carga el archivo. Sin esto, `import Friday.Geometry` falla
 # en el QML y el nucleo 3D cae al plan B sin explicar por que.
 try:
-    from . import geometry as _geometry     # noqa: F401
+    from . import geometry as _geometry  # noqa: F401
     GEOMETRY_OK = True
     GEOMETRY_WHY = ""
 except Exception as _exc:                   # QtQuick3D ausente o sin driver

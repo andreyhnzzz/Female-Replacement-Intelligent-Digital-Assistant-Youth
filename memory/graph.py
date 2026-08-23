@@ -28,8 +28,11 @@ class Graph:
     def build(self, force: bool = False) -> "Graph":
         if not force and (time.time() - self._built) < self.ttl:
             return self
-        self.notes.clear(); self.by_rel.clear()
-        self.out.clear(); self.inn.clear(); self.dangling.clear()
+        self.notes.clear()
+        self.by_rel.clear()
+        self.out.clear()
+        self.inn.clear()
+        self.dangling.clear()
 
         for note in self.vault.all_notes():
             self.notes[note.title] = note
@@ -89,7 +92,8 @@ class Graph:
             piece = f"### [[{n.title}]]  ({n.rel})\n{n.body.strip()[:1200]}\n"
             if total + len(piece) > max_chars:
                 break
-            chunks.append(piece); total += len(piece)
+            chunks.append(piece)
+            total += len(piece)
         return "\n".join(chunks)
 
     def orphans(self) -> list[str]:

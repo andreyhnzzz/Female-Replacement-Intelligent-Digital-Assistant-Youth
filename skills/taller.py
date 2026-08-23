@@ -32,7 +32,7 @@ from core.bus import BUS
 from core.lang import parecido, slug_words
 from core.proc import NO_WINDOW
 
-from .base import PendingAction, Skill, SkillContext, SkillResult
+from .base import TTL_CONFIRMACION_LARGA_S, PendingAction, Skill, SkillContext, SkillResult
 
 # ── como se pide ──────────────────────────────────────────────────
 ENTRAR = re.compile(
@@ -69,6 +69,30 @@ _NO_PROYECTO = {
 _MARCAS = (".git", "pom.xml", "package.json", "pyproject.toml", "Cargo.toml",
            "go.mod", "CMakeLists.txt", "build.gradle", "build.gradle.kts",
            "requirements.txt", "Makefile", "composer.json")
+
+
+def _es_proyecto(p: Path) -> bool:
+    """¿La carpeta ya es un repo? Por las marcas de `_MARCAS`, no por
+    convencion de nombre — «src» no dice nada, un `.git` si."""
+    return any((p / marca).exists() for marca in _MARCAS)
+
+
+def _hijos_candidatos(base: Path) -> list[Path]:
+    """Subcarpetas que podrian ser un proyecto: sin ocultas ni salida de build."""
+    try:
+        return [c for c in base.iterdir()
+                if c.is_dir() and not c.name.startswith(".")
+                and c.name.lower() not in _NO_PROYECTO]
+    except OSError:
+        return []
+
+
+def _agrega_proyecto(out: list[tuple[str, Path]], vistos: set[str], p: Path) -> None:
+    """Suma `p` a `out` si no esta ya, comparando por ruta en minusculas."""
+    clave = str(p).lower()
+    if clave not in vistos:
+        vistos.add(clave)
+        out.append((p.name, p))
 
 # Ruido que sobra una vez identificados proyecto y tarea.
 _LIMPIA = re.compile(
@@ -410,7 +434,7 @@ class TallerSkill(Skill):
                 pending=PendingAction(
                     describe=describe,
                     run=lambda: self._lanzar(ctx, nombre, ruta, tarea, True),
-                    ttl_s=180.0))
+                    ttl_s=TTL_CONFIRMACION_LARGA_S))
 
         return self._lanzar(ctx, nombre, ruta, tarea, False)
 
@@ -533,40 +557,24 @@ class TallerSkill(Skill):
         out: list[tuple[str, Path]] = []
         vistos: set[str] = set()
 
-        def sumar(p: Path) -> None:
-            if str(p).lower() not in vistos:
-                vistos.add(str(p).lower())
-                out.append((p.name, p))
-
-        def hijos(base: Path) -> list[Path]:
-            try:
-                return [c for c in base.iterdir()
-                        if c.is_dir() and not c.name.startswith(".")
-                        and c.name.lower() not in _NO_PROYECTO]
-            except OSError:
-                return []
-
-        def es_proyecto(p: Path) -> bool:
-            return any((p / marca).exists() for marca in _MARCAS)
-
         for root in getattr(policy, "agent_roots", []):
             if not root.is_dir():
                 continue
-            sumar(root)
-            if es_proyecto(root):
+            _agrega_proyecto(out, vistos, root)
+            if _es_proyecto(root):
                 continue                         # la raiz ES el proyecto
 
-            nivel = hijos(root)
+            nivel = _hijos_candidatos(root)
             for h in nivel:                      # contenedor: sus hijos valen
-                sumar(h)
+                _agrega_proyecto(out, vistos, h)
             for _ in range(self.depth - 1):      # mas hondo: solo si parece repo
                 siguiente: list[Path] = []
                 for base in nivel:
-                    if es_proyecto(base):
+                    if _es_proyecto(base):
                         continue                 # no se entra en un repo ya listado
-                    for c in hijos(base):
-                        if es_proyecto(c):
-                            sumar(c)
+                    for c in _hijos_candidatos(base):
+                        if _es_proyecto(c):
+                            _agrega_proyecto(out, vistos, c)
                         siguiente.append(c)
                 if not siguiente:
                     break

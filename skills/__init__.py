@@ -3,12 +3,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .agenda import AgendaSkill
-from .archivos import ArchivosSkill
 from core.bus import BUS
 
-from .base import (Entrega, PendingAction, Skill, SkillContext,
-                   SkillResult)
+from .agenda import AgendaSkill
+from .archivos import ArchivosSkill
+from .base import TTL_ECO_S, Entrega, PendingAction, Skill, SkillContext, SkillResult
 from .documentos import DocumentosSkill
 from .inbox import InboxSkill
 from .memoria import MemoriaSkill
@@ -65,4 +64,4 @@ def build_skills(cfg: "Config") -> dict[str, Skill]:
 
 
 __all__ = ["Skill", "SkillContext", "SkillResult", "PendingAction",
-           "Entrega", "ALL_SKILLS", "build_skills"]
+           "Entrega", "ALL_SKILLS", "build_skills", "TTL_ECO_S"]
