@@ -172,7 +172,17 @@ class Vault:
     def __init__(self, root: Path | str, raw="raw", wiki="wiki", outputs="outputs",
                  daily_format="%Y-%m-%d", cache_max: int = 512,
                  restrict_permissions: bool = False):
-        self.root = Path(root)
+        # Resuelto UNA vez aqui, no en cada llamada: `_resolve()` ya
+        # resolvia el path de cada nota para compararlo contra el vault,
+        # pero comparaba contra `self.root` sin resolver. En una maquina
+        # donde el nombre corto (8.3) y el largo difieren -- paso en el
+        # runner de Windows de CI, `%TEMP%` daba `RUNNER~1` mientras
+        # `Path.resolve()` expandia a `runneradmin` -- las dos formas del
+        # mismo directorio dejaban de ser el mismo string, y
+        # `p.relative_to(self.root)` reventaba con una nota recien escrita
+        # DENTRO del vault. Resolver una vez aqui hace que todo lo que
+        # compare contra `self.root` use la misma forma canonica.
+        self.root = Path(root).resolve()
         self.raw = self.root / raw
         self.wiki = self.root / wiki
         self.outputs = self.root / outputs
@@ -461,7 +471,11 @@ class Vault:
             p = self.root / p
         p = p if p.suffix == ".md" else p.with_suffix(".md")
         p = p.resolve()
-        root = self.root.resolve()
-        if root not in p.parents and p != root:
+        # `self.root` ya esta resuelto (ver `__init__`): comparar aqui
+        # contra una segunda resolucion de si mismo era inofensivo, pero
+        # dejaba la puerta abierta a comparar contra el original sin
+        # resolver en cualquier otro metodo que no pasara por aqui (que es
+        # exactamente lo que le pasaba a `_parse`).
+        if self.root not in p.parents and p != self.root:
             raise ValueError(f"Ruta fuera del vault: {p}")
         return p

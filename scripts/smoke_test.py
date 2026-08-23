@@ -64,6 +64,27 @@ async def main() -> int:
 
     cfg = load_config(ROOT / "config" / "friday.toml")
     vault = Vault(tmp)
+
+    # Regresion: el runner de Windows de CI daba `%TEMP%` en forma corta
+    # (8.3, "RUNNER~1") mientras `Path.resolve()` la expandia a la larga
+    # ("runneradmin"). `Vault.root` sin resolver comparado contra una nota
+    # ya resuelta ("p.relative_to(self.root)") reventaba escribiendo una
+    # nota RECIEN CREADA, dentro del propio vault. Se reproduce con el
+    # nombre corto real de Windows, no con un truco de string: pathlib ya
+    # normaliza "." y compara mayus/minus sin distinguir en Windows, asi
+    # que ninguno de los dos reproduce esto — hace falta el alias 8.3 de
+    # verdad.
+    if sys.platform == "win32":
+        import ctypes
+        buf = ctypes.create_unicode_buffer(260)
+        ok = ctypes.windll.kernel32.GetShortPathNameW(str(tmp), buf, 260)
+        corto = Path(buf.value) if ok else tmp
+        if str(corto) != str(tmp):     # el volumen tiene nombres 8.3 activos
+            vault_corto = Vault(corto)
+            nota_regresion = vault_corto.write("wiki/Nota.md", "cuerpo")
+            check("una raiz en su forma corta (8.3) no revienta al escribir",
+                  nota_regresion.rel == "wiki/Nota.md", nota_regresion.rel)
+
     graph = Graph(vault, ttl_s=0)
     engine = FakeEngine(cfg)
     skills = build_skills(cfg)
