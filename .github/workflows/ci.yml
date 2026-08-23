@@ -24,13 +24,31 @@ jobs:
           python-version: "3.12"
 
       - name: Instalar dependencias
+        # SIEMPRE `python -m pip`, nunca `pip` a secas: el runner de
+        # windows-latest trae varios Python instalados, y un `pip.exe`
+        # suelto en el PATH puede resolver a uno distinto del que
+        # `actions/setup-python` acaba de configurar. Con `pip install` a
+        # secas, las dependencias se instalaban en el interprete
+        # equivocado: los pasos de prueba corrian casi enteros sobre
+        # stdlib (los imports pesados van diferidos dentro de funciones,
+        # asi que el fallo no aparecia hasta el primer `import numpy` a
+        # nivel de modulo) y reventaban a mitad de la suite con
+        # `ModuleNotFoundError`, no al instalar. Por la misma razon, el
+        # lint de abajo corre con `python -m ruff`.
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install -r requirements-dev.txt
+          python -m pip install -r requirements.txt
+          python -m pip install -r requirements-dev.txt
+
+      - name: Diagnostico del entorno
+        # Si esto vuelve a pasar, que el log lo diga aqui y no cincuenta
+        # lineas mas abajo con un ModuleNotFoundError sin contexto.
+        run: |
+          python -c "import sys; print('interprete:', sys.executable)"
+          python -m pip show numpy PySide6 | Select-String "^Name:|^Location:"
 
       - name: Lint (ruff)
-        run: ruff check .
+        run: python -m ruff check .
 
       - name: Pruebas — memoria, consolidacion, skills, enrutado, reloj
         run: python scripts/smoke_test.py
