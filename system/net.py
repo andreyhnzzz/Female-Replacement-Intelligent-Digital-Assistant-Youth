@@ -153,3 +153,51 @@ async def fetch(url: str, policy: Policy, *, timeout_s: float = 12.0,
 
     except Exception as exc:
         return Fetched(url, error=f"{type(exc).__name__}: {exc}"[:160])
+
+
+async def post(url: str, policy: Policy, *, json: dict | None = None,
+               data: str = "", headers: dict[str, str] | None = None,
+               timeout_s: float = 10.0, ua: str = "") -> Fetched:
+    """Manda algo a la red. El unico camino de salida con cuerpo.
+
+    Tres diferencias con `fetch`, y las tres son la misma razon de fondo —
+    esto **empuja datos**, no los trae:
+
+    1. **No sigue redirecciones, ni una.** En un GET, seguir un salto
+       autorizandolo antes es aceptable. En un POST el salto reenviaria el
+       cuerpo a un destino que el usuario no escribio, y el cuerpo es
+       precisamente lo que no queria publicar. Un 3xx aqui es un error, no
+       un paso intermedio.
+    2. **La autorizacion es la misma**, `authorize`, sin atajo: la red local
+       tampoco recibe avisos.
+    3. **Tampoco lanza.** La llaman notificadores en segundo plano; que no
+       salga un aviso no puede tumbar el ciclo que lo mando.
+    """
+    try:
+        import aiohttp
+    except ImportError:
+        return Fetched(url, error="falta aiohttp (pip install aiohttp)")
+
+    permiso = await authorize(url, policy)
+    if not permiso.allowed:
+        return Fetched(url, error=permiso.reason)
+
+    cabeceras = {"User-Agent": ua or UA}
+    cabeceras.update(headers or {})
+
+    try:
+        to = aiohttp.ClientTimeout(total=timeout_s)
+        sesion = await session(timeout_s)
+        async with sesion.post(url, json=json, data=data or None,
+                               headers=cabeceras, timeout=to,
+                               allow_redirects=False) as r:
+            cuerpo = (await r.text())[:2000]
+            if r.status in (301, 302, 303, 307, 308):
+                return Fetched(url, status=r.status,
+                               error="el destino redirige; un aviso no se reenvia")
+            if r.status >= 400:
+                return Fetched(url, status=r.status,
+                               error=f"HTTP {r.status}: {cuerpo[:120]}")
+            return Fetched(url, body=cuerpo or "ok", status=r.status)
+    except Exception as exc:
+        return Fetched(url, error=f"{type(exc).__name__}: {exc}"[:160])

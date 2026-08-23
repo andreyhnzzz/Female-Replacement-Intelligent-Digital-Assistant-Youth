@@ -149,6 +149,19 @@ class PageText:
 
 
 @dataclass(frozen=True, slots=True)
+class Notice:
+    """Un aviso que sale del equipo. Es red, y por eso lleva politica.
+
+    `urgencia` la usa el transporte para decidir sonido y prioridad; no
+    cambia nada de lo que FRIDAY decide.
+    """
+    title: str
+    body: str = ""
+    urgencia: str = "normal"         # baja | normal | alta
+    tag: str = ""                    # de que evento salio: agenda, taller...
+
+
+@dataclass(frozen=True, slots=True)
 class ScreenContext:
     """Lo que el usuario tiene delante, sin adivinar."""
     active_title: str = ""
@@ -341,6 +354,29 @@ class DocumentWriter(Protocol):
                     filas: list[list[Any]]) -> "Path": ...
 
 
+@runtime_checkable
+class NotifyPort(Protocol):
+    """Manda un aviso FUERA del equipo: al movil, a un chat, a un webhook.
+
+    Es la unica salida de FRIDAY que llega a una persona por un camino que
+    no es la voz, y existe por el caso que la voz no cubre: un encargo al
+    taller tarda veinte minutos y para entonces no estas delante.
+
+    **Es red, y de las delicadas**: el cuerpo del aviso lleva lo que FRIDAY
+    iba a decirte en voz alta, o sea contenido de tu maquina saliendo a un
+    servicio de terceros. Por eso tiene su propio permiso
+    (`policy.can_notify`) y de fabrica esta apagado — no hay destino que
+    adivinar y adivinar mal es publicar tus recordatorios.
+
+    `async` como los demas puertos de red. Nunca lanza: devuelve si salio.
+    """
+
+    async def send(self, notice: Notice) -> bool: ...
+
+    @property
+    def target(self) -> str: ...
+
+
 # ══════════════════════════════════════════════ agregador
 @dataclass(slots=True)
 class SystemAccess:
@@ -364,6 +400,7 @@ class SystemAccess:
     session: SessionControl | None = None
     clipboard: Clipboard | None = None
     documents: DocumentWriter | None = None
+    notify: NotifyPort | None = None
 
     def available(self) -> dict[str, bool]:
         return {f: getattr(self, f) is not None for f in self.__slots__}

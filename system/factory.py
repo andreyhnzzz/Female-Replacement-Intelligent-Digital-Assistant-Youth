@@ -14,6 +14,7 @@ from typing import Any
 from core.policy import Policy
 from system.files import LocalFileIndex, LocalFileOrganizer
 from system.news import RssNewsReader
+from system.notify import build_notifier
 from system.pages import HttpPageReader
 from system.ports import SystemAccess
 from system.web import BrowserWebOpener
@@ -54,6 +55,10 @@ def build_system_access(cfg: Any, policy: Policy) -> SystemAccess:
         lang=str(cfg.get("identity.language", "es")),
         contact=contact,
     )
+    # El notificador es la excepcion: queda en None si no hay destino. Ver
+    # `system/notify.py::build_notifier` — una capacidad sin configurar no
+    # es lo mismo que una capacidad denegada.
+    access.notify = build_notifier(cfg, policy)
 
     # ── especifico de plataforma ──────────────────────────────────
     if sys.platform == "win32":

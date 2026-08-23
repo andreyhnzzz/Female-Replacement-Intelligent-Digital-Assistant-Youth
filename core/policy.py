@@ -121,10 +121,17 @@ class Policy:
             "media": bool(cfg.get(f"{p}.allow_media", True)),
             "session": bool(cfg.get(f"{p}.allow_session", False)),
             "clipboard": bool(cfg.get(f"{p}.allow_clipboard", True)),
+            # Las radios NO viven dentro de `media` aunque las dos se pidan
+            # con la misma voz: apagar el wifi te deja sin red —y a FRIDAY
+            # sin motor remoto—, subir el volumen no. El criterio de
+            # separacion es la consecuencia, no la comodidad.
+            "radio": bool(cfg.get(f"{p}.allow_radio", False)),
+            "display": bool(cfg.get(f"{p}.allow_display", True)),
         }
 
         self.allow_agent = bool(cfg.get(f"{p}.allow_agent", True))
         self.allow_memory_prune = bool(cfg.get(f"{p}.allow_memory_prune", True))
+        self.allow_notify = bool(cfg.get(f"{p}.allow_notify", False))
 
         root = Path(cfg.root) if hasattr(cfg, "root") else Path.cwd()
         vr = cfg.get("vault.root", "vault") if hasattr(cfg, "get") else "vault"
@@ -317,13 +324,21 @@ class Policy:
                             "policy.allow_web")
         return Decision(Verdict.ALLOW)
 
-    def can_control(self, kind: str) -> Decision:
-        """Control directo del escritorio: `media`, `session` o `clipboard`.
+    def can_control(self, kind: str, *, desconecta: bool = False) -> Decision:
+        """Control directo del escritorio: `media`, `session`, `clipboard`,
+        `radio` o `display`.
 
         Un interruptor cada uno porque el riesgo no se parece: el volumen se
         deshace solo, la sesion te deja fuera y el portapapeles a veces tiene
         una contraseña. Con un solo `allow_control`, habilitar lo util
         obligaria a habilitar lo delicado.
+
+        `desconecta` distingue las dos mitades de una misma capacidad. Con
+        las radios el sentido importa: **encender** wifi no le quita nada a
+        nadie, **apagarlo** te deja sin red y puede dejar a la propia FRIDAY
+        sin motor remoto a media frase. Un solo permiso para las dos
+        obligaria a confirmar tambien lo inofensivo, y confirmar de mas
+        entrena a decir «si» sin escuchar.
         """
         if not self.enabled:
             return Decision(Verdict.ALLOW, "politica desactivada")
@@ -341,7 +356,34 @@ class Policy:
         # echarte de la maquina sin que lo digas dos veces.
         if kind == "session":
             return Decision(Verdict.CONFIRM, "bloquear o suspender se confirma", "session")
+        if kind == "radio" and desconecta:
+            return Decision(Verdict.CONFIRM,
+                            "apagar una radio te deja sin esa conexion", "radio-off")
         return Decision(Verdict.ALLOW)
+
+    def can_notify(self, target: str = "") -> Decision:
+        """Mandar un aviso FUERA del equipo: al movil, a un chat, a un webhook.
+
+        No es `can_fetch` al reves y no reusa su interruptor: descargar una
+        pagina trae datos de fuera, esto **manda datos tuyos** a un servicio
+        de terceros —lo que FRIDAY te iba a decir en voz alta, que sale de tu
+        agenda y de tus proyectos. La direccion del flujo es la diferencia, y
+        por eso el permiso es propio y esta apagado de fabrica.
+
+        No hay destino razonable que adivinar: sin `[notify] target` no se
+        manda nada, aunque el interruptor este encendido.
+        """
+        if not self.enabled:
+            return Decision(Verdict.ALLOW, "politica desactivada")
+        if not self.allow_notify:
+            return Decision(Verdict.DENY, "mandar avisos fuera esta deshabilitado",
+                            "policy.allow_notify")
+        if not str(target).strip():
+            return Decision(Verdict.DENY, "no hay destino configurado",
+                            "notify.target")
+        # El destino es una URL y sale a la red: pasa por el mismo guardia
+        # que cualquier otra salida, incluido el bloqueo de la red local.
+        return self.can_fetch(str(target))
 
     def can_fetch(self, url: str) -> Decision:
         """Descargar una pagina para leerla. Distinto de abrirla: `can_web`
@@ -430,6 +472,7 @@ class Policy:
             "web_fetch": self.allow_web_fetch,
             "agent": self.allow_agent,
             "memory_prune": self.allow_memory_prune,
+            "notify": self.allow_notify,
             "control": dict(self.control),
             "confirm_over": self.confirm_over,
             "write_roots": [str(r) for r in self.write_roots],
