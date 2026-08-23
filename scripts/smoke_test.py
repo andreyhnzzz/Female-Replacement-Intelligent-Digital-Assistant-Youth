@@ -595,6 +595,56 @@ async def main() -> int:
           and es_narrativo("se me cayo el servidor de produccion"),
           "misma familia de palabras, intenciones opuestas")
 
+    # ══════════════════ EL RELOJ DECIDE SIN EFECTOS ════════════════
+    print()
+    print("  -- el reloj: puro, y no repite --")
+    from datetime import datetime as _dt
+    from core.scheduler import Job, Scheduler, parse_dias, parse_intervalo
+
+    trabajos = [Job(name="briefing", do="dame el briefing", at=(8, 30),
+                    days=parse_dias("laborables"))]
+    reloj = Scheduler(trabajos, lead_min=15, gracia_min=10)
+
+    lunes = _dt(2026, 8, 24, 8, 31)
+    d1 = reloj.due(lunes)
+    check("un trabajo vencido dentro de la gracia dispara", len(d1) == 1,
+          d1[0].clave if d1 else "nada")
+    check("y no vuelve a disparar con la marca puesta",
+          reloj.due(lunes, ya_disparado={d1[0].clave}) == [],
+          "la marca sobrevive al reinicio: se escribe en la diaria")
+    check("un sabado no es laborable", reloj.due(_dt(2026, 8, 22, 8, 31)) == [])
+    check("fuera de la ventana de gracia tampoco",
+          reloj.due(_dt(2026, 8, 24, 9, 30)) == [],
+          "enterarse de la reunion cuando ya termino no es avisar")
+
+    evento = {"when": "2026-08-24T09:00", "title": "Revision de sprint",
+              "time": "09:00", "ts": _dt(2026, 8, 24, 9, 0).timestamp(),
+              "done": False}
+    todo_el_dia = {"when": "2026-08-24T00:00", "title": "Entrega", "time": "",
+                   "ts": _dt(2026, 8, 24, 0, 0).timestamp(), "done": False}
+    avisos = [x for x in reloj.due(_dt(2026, 8, 24, 8, 50),
+                                   eventos=[evento, todo_el_dia])
+              if x.kind == "recordatorio"]
+    check("un evento con hora avisa antes de la hora", len(avisos) == 1,
+          avisos[0].texto if avisos else "nada")
+    check("y dice cuanto falta, no la hora",
+          bool(avisos) and "10 minutos" in avisos[0].texto, avisos[0].texto)
+    check("un evento de todo el dia no despierta a nadie a las 00:00",
+          all("Entrega" not in a.titulo for a in avisos),
+          "de esos habla el briefing, que es donde tienen sentido")
+    check("un recordatorio sale tambien fuera del equipo",
+          bool(avisos) and avisos[0].notify)
+    check("decidir no ejecuta nada",
+          all(hasattr(x, "texto") for x in avisos),
+          "due() devuelve intenciones; los efectos son de friday.py")
+    check("un intervalo mal escrito no revienta el arranque",
+          parse_intervalo("cada tanto") == 0.0)
+
+    # El primer tick tras arrancar no dispara los intervalos.
+    porintervalo = Scheduler([Job(name="pulso", do="metricas", every_s=1800)])
+    check("encender FRIDAY no lanza de golpe lo declarado «cada 6h»",
+          porintervalo.due(lunes) == [])
+
     # ══════════════════ VOCABULARIO COMPARTIDO, INTENCIONES DISTINTAS ══
     print()
     print("  -- una palabra del dominio no es una peticion del dominio --")
