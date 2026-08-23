@@ -23,22 +23,26 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Instalar dependencias
-        # SIEMPRE `python -m pip`, nunca `pip` a secas: el runner de
-        # windows-latest trae varios Python instalados, y un `pip.exe`
-        # suelto en el PATH puede resolver a uno distinto del que
-        # `actions/setup-python` acaba de configurar. Con `pip install` a
-        # secas, las dependencias se instalaban en el interprete
-        # equivocado: los pasos de prueba corrian casi enteros sobre
-        # stdlib (los imports pesados van diferidos dentro de funciones,
-        # asi que el fallo no aparecia hasta el primer `import numpy` a
-        # nivel de modulo) y reventaban a mitad de la suite con
-        # `ModuleNotFoundError`, no al instalar. Por la misma razon, el
-        # lint de abajo corre con `python -m ruff`.
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-          python -m pip install -r requirements-dev.txt
+      # Un `pip install` por STEP, nunca varios en el mismo bloque `run:`.
+      # En pwsh (el shell por defecto de windows-latest) solo el codigo de
+      # salida del ULTIMO comando de un bloque `run: |` decide si el step
+      # falla — un `pip install -r requirements.txt` que revienta a mitad
+      # de descarga (PySide6 pesa mucho, y un timeout de red no es raro)
+      # quedaba tapado por el `pip install -r requirements-dev.txt` de la
+      # linea siguiente, que si salia bien. El step entero se marcaba en
+      # verde con numpy y PySide6 sin instalar, y la suite reventaba
+      # cincuenta lineas mas abajo con un `ModuleNotFoundError` que no
+      # tenia nada que ver con el fallo real. Steps separados: cada uno
+      # se falla solo, y ademas SIEMPRE `python -m pip`, nunca `pip` a
+      # secas (el runner trae varios Python instalados).
+      - name: Actualizar pip
+        run: python -m pip install --upgrade pip
+
+      - name: Instalar dependencias de produccion
+        run: python -m pip install --timeout 120 --retries 5 -r requirements.txt
+
+      - name: Instalar dependencias de desarrollo
+        run: python -m pip install -r requirements-dev.txt
 
       - name: Diagnostico del entorno
         # Si esto vuelve a pasar, que el log lo diga aqui y no cincuenta
